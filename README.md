@@ -12,7 +12,7 @@
 ## Mars Hydro Cloud Integration
 This integration communicates with the Mars Hydro Cloud and controls and monitors your Mars Hydro devices (lights and fans) through Home Assistant.
 
-⚠️ Warning: API only supports one device to be logged in, so you will get kicked out of the app as soon as you login.
+⚠️ Warning: API only supports one device to be logged in, so you will get kicked out of the app as soon as you login. Also make sure, you use the MarsHydro App, not MarsPro. 
 
 ## Additional Note
 Since I only own one device (an FC3000 Light), I initially focused on supporting that device. However, support for **fans** and their controls has now been added. If you have the Bluetooth Stick, this integration should work with your devices.
