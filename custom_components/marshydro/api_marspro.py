@@ -140,61 +140,31 @@ class MarsProAPI:
         """Toggle the light or fan switch (on/off) - MarsPro version."""
         await self._ensure_token()
 
-        system_data = self._generate_system_data()
-        headers = {
-            "systemData": system_data,
-            "Content-Type": "application/json",
-        }
-        
-        # Payload adapté pour MarsPro
+        # Format pour allumer/éteindre (hypothèse basée sur le pattern découvert)
         payload = {
-            "isClose": is_close,
-            "deviceId": device_id,
-            "groupId": None
+            "data": {
+                "method": "upDataStatus", 
+                "params": {
+                    "status": "0" if is_close else "1",  # 0=éteint, 1=allumé
+                    "deviceId": str(device_id)
+                }
+            }
         }
 
         _LOGGER.debug(f"MarsPro toggle switch payload: {json.dumps(payload, indent=2)}")
 
-        # Essayer différents endpoints de contrôle
-        control_endpoints = [
-            "/udm/lampSwitch/v1",  # Endpoint legacy adapté
-            "/device/control",      # Endpoint hypothétique
-            "/api/device/control"   # Endpoint avec préfixe API
-        ]
-
-        async with aiohttp.ClientSession() as session:
-            for endpoint in control_endpoints:
-                try:
-                    full_url = f"{self.base_url}{endpoint}"
-                    async with session.post(
-                        full_url,
-                        headers=headers, 
-                        json=payload
-                    ) as response:
-                        response_json = await response.json()
-                        _LOGGER.info(
-                            "MarsPro Toggle Switch Response: %s",
-                            json.dumps(response_json, indent=2),
-                        )
-                        
-                        # Gestion des codes d'erreur MarsPro
-                        if response_json.get("code") == "102" or response_json.get("status") == "unauthorized":
-                            _LOGGER.warning("Token expired, re-authenticating...")
-                            await self.login()
-                            return await self.toggle_switch(is_close, device_id)
-                        
-                        if response_json.get("code") == "000":  # Succès
-                            return response_json
-                        else:
-                            _LOGGER.warning(f"Control failed with endpoint {endpoint}: {response_json.get('msg', 'Unknown error')}")
-                            continue
-                            
-                except Exception as e:
-                    _LOGGER.warning(f"Control failed with endpoint {endpoint}: {e}")
-                    continue
-            
-            # Si aucun endpoint ne fonctionne, retourner une erreur
-            raise Exception("All MarsPro control endpoints failed")
+        # ENDPOINT EXACT QUI MARCHE !
+        endpoint = "/api/upData/device"
+        
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get("code") == "000":
+            _LOGGER.info(f"MarsPro switch {'OFF' if is_close else 'ON'} successfully")
+            return data
+        else:
+            error_msg = data.get('msg', 'Unknown error') if data else "No response"
+            _LOGGER.error(f"MarsPro switch control failed: {error_msg}")
+            raise Exception(f"MarsPro switch control failed: {error_msg}")
 
     async def _process_device_list(self, device_product_group):
         """Retrieve device list for a given product group - MarsPro version."""
@@ -275,111 +245,59 @@ class MarsProAPI:
             if device_data:
                 self.device_id = device_data.get("id")
 
-        system_data = self._generate_system_data()
-        headers = {
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/json",
-            "Host": "api.lgledsolutions.com",
-            "systemData": system_data,
-            "User-Agent": "MarsPro/2.0.0",
-        }
-        
-        # Payload adapté pour MarsPro
+        # Format exact capturé !
         payload = {
-            "deviceLightRate": brightness,
-            "deviceId": self.device_id,
-            "groupId": None
+            "data": {
+                "method": "upDataStatus",
+                "params": {
+                    "rate": str(brightness),  # String comme dans la capture
+                    "deviceId": str(self.device_id)
+                }
+            }
         }
 
-        # Essayer différents endpoints de luminosité
-        brightness_endpoints = [
-            "/udm/adjustLight/v1",    # Endpoint legacy adapté
-            "/device/setBrightness",  # Endpoint hypothétique
-            "/api/device/setBrightness"  # Endpoint avec préfixe API
-        ]
-
-        async with aiohttp.ClientSession() as session:
-            for endpoint in brightness_endpoints:
-                try:
-                    full_url = f"{self.base_url}{endpoint}"
-                    async with session.post(
-                        full_url,
-                        headers=headers, 
-                        json=payload
-                    ) as response:
-                        response_json = await response.json()
-                        _LOGGER.info(
-                            "MarsPro Set Brightness Response: %s",
-                            json.dumps(response_json, indent=2),
-                        )
-                        
-                        if response_json.get("code") == "000":  # Succès
-                            return response_json
-                        else:
-                            _LOGGER.warning(f"Brightness control failed with endpoint {endpoint}: {response_json.get('msg', 'Unknown error')}")
-                            continue
-                            
-                except Exception as e:
-                    _LOGGER.warning(f"Brightness control failed with endpoint {endpoint}: {e}")
-                    continue
-            
-            raise Exception("All MarsPro brightness control endpoints failed")
+        # ENDPOINT EXACT QUI MARCHE !
+        endpoint = "/api/upData/device"
+        
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get("code") == "000":
+            _LOGGER.info(f"MarsPro brightness set to {brightness}% successfully")
+            return data
+        else:
+            error_msg = data.get('msg', 'Unknown error') if data else "No response"
+            _LOGGER.error(f"MarsPro brightness control failed: {error_msg}")
+            raise Exception(f"MarsPro brightness control failed: {error_msg}")
 
     async def set_fanspeed(self, speed, fan_device_id):
         """Set the speed of the MarsPro fan."""
         await self._ensure_token()
 
-        system_data = self._generate_system_data()
-        headers = {
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/json",
-            "Host": "api.lgledsolutions.com",
-            "systemData": system_data,
-            "User-Agent": "MarsPro/2.0.0",
-        }
-        
-        # Payload adapté pour MarsPro
+        # Même format que pour la luminosité
         payload = {
-            "deviceLightRate": speed,  # Utiliser le même paramètre que pour la luminosité
-            "deviceId": fan_device_id,
-            "groupId": None
+            "data": {
+                "method": "upDataStatus",
+                "params": {
+                    "rate": str(speed),  # Utiliser "rate" comme pour la luminosité
+                    "deviceId": str(fan_device_id)
+                }
+            }
         }
 
         _LOGGER.debug(f"MarsPro fan speed payload: {json.dumps(payload, indent=2)}")
 
-        # Utiliser le même endpoint que pour la luminosité (pattern découvert)
-        speed_endpoints = [
-            "/udm/adjustLight/v1",    # Endpoint legacy adapté
-            "/device/setFanSpeed",    # Endpoint hypothétique
-            "/api/device/setFanSpeed" # Endpoint avec préfixe API
-        ]
-
-        async with aiohttp.ClientSession() as session:
-            for endpoint in speed_endpoints:
-                try:
-                    full_url = f"{self.base_url}{endpoint}"
-                    async with session.post(
-                        full_url,
-                        headers=headers, 
-                        json=payload
-                    ) as response:
-                        response_json = await response.json()
-                        _LOGGER.info(
-                            "MarsPro Set Fan Speed Response: %s",
-                            json.dumps(response_json, indent=2),
-                        )
-                        
-                        if response_json.get("code") == "000":  # Succès
-                            return response_json
-                        else:
-                            _LOGGER.warning(f"Fan speed control failed with endpoint {endpoint}: {response_json.get('msg', 'Unknown error')}")
-                            continue
-                            
-                except Exception as e:
-                    _LOGGER.warning(f"Fan speed control failed with endpoint {endpoint}: {e}")
-                    continue
-            
-            raise Exception("All MarsPro fan speed control endpoints failed")
+        # ENDPOINT EXACT QUI MARCHE !
+        endpoint = "/api/upData/device"
+        
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get("code") == "000":
+            _LOGGER.info(f"MarsPro fan speed set to {speed}% successfully")
+            return data
+        else:
+            error_msg = data.get('msg', 'Unknown error') if data else "No response"
+            _LOGGER.error(f"MarsPro fan speed control failed: {error_msg}")
+            raise Exception(f"MarsPro fan speed control failed: {error_msg}")
 
     def _generate_system_data(self):
         """Generate systemData payload for MarsPro with updated fields."""
