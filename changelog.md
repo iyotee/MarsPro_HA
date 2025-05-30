@@ -1,5 +1,57 @@
 # Changelog
 
+## [2.0.0] - 2025-01-XX - Support MarsPro
+
+### 🆕 Nouveautés
+- **Support MarsPro** : Ajout du support pour la nouvelle application MarsPro
+- **API dual** : Choix entre MarsHydro (legacy) et MarsPro lors de la configuration
+- **Fallback automatique** : Si MarsPro échoue, retour automatique vers l'API MarsHydro
+- **Configuration améliorée** : Interface utilisateur avec sélection du type d'API
+- **Outils de développement** : Scripts de découverte et test des APIs
+
+### 🔧 Améliorations
+- Refactorisation du code API pour supporter plusieurs backends
+- Logs améliorés avec indication du type d'API utilisée
+- Gestion d'erreur robuste avec fallback
+- Documentation française complète
+
+### 🛠️ Technique
+- Nouvelle classe `MarsProAPI` avec endpoints hypothétiques
+- Modification du `config_flow` pour le choix d'API
+- Mise à jour du manifest (v2.0.0)
+- Remplacement de `requests` par `aiohttp` pour de meilleures performances
+
+### 📁 Nouveaux fichiers
+- `custom_components/marshydro/api_marspro.py` - Nouvelle API MarsPro
+- `tools/api_discovery.py` - Script de découverte d'endpoints
+- `tools/test_integration.py` - Script de test
+- `README_MarsPro.md` - Documentation française
+
+### ⚠️ Notes importantes
+- Les endpoints MarsPro sont hypothétiques et nécessitent des ajustements
+- Le fallback vers MarsHydro assure la continuité de service
+- Configuration existante compatible (défaut sur MarsHydro legacy)
+
+### 🔮 Prochaines étapes
+- Identification des vrais endpoints MarsPro
+- Tests avec utilisateurs MarsPro
+- Optimisation basée sur les retours
+
+---
+
+## [1.0.4] - 2024-XX-XX - Version originale
+
+### Features
+- Support for Mars Hydro lights and fans
+- Cloud API integration
+- Home Assistant entities for brightness, fan speed, temperature, humidity
+- Switch controls for device power
+
+### Known Issues
+- ⚠️ API only supports one device to be logged in
+- Only works with MarsHydro App, not MarsPro
+- May disconnect mobile app when Home Assistant connects
+
 ## Version 1.0.3
 
 - fixxed missing toggle_switch function
