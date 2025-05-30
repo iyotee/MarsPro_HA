@@ -12,85 +12,84 @@ class MarsProAPI:
         self.email = email
         self.password = password
         self.token = None
-        # URL réelle découverte et confirmée fonctionnelle !
-        self.base_url = "https://api.lgledsolutions.com/api/marspro"
+        self.user_id = None
+        self.base_url = "https://mars-pro.api.lgledsolutions.com"  # URL CORRECTE !
+        
+        # Endpoints découverts
+        self.endpoints = [
+            "/api/android/ulogin/mailLogin/v1",  # ENDPOINT QUI MARCHE !
+        ]
         self.api_lock = asyncio.Lock()
         self.last_login_time = 0
         self.login_interval = 300  # Minimum interval between logins in seconds
         self.device_id = None
 
-    async def login(self):
-        """Authenticate and retrieve the token for MarsPro."""
-        async with self.api_lock:
-            now = time.time()
-            if self.token and (now - self.last_login_time < self.login_interval):
-                _LOGGER.info("Token still valid, skipping login.")
-                return
-
-            system_data = self._generate_system_data()
-            headers = {"systemData": system_data, "Content-Type": "application/json"}
-            
-            # Endpoints CONFIRMÉS FONCTIONNELS lors des tests !
-            endpoints_to_try = [
-                "/api/auth/login",     # ✅ CONFIRMÉ: Status 200, JSON valide
-                "/api/v2/login",       # ✅ CONFIRMÉ: Status 200, JSON valide  
-                "/api/v1/login",       # ✅ CONFIRMÉ: Status 200, JSON valide
-                "/ulogin/mailLogin/v1" # ✅ CONFIRMÉ: Status 200, JSON valide
-            ]
-            
-            # Payload basé sur les tests de découverte
-            payload = {
-                "email": self.email,
-                "password": self.password,
-                "loginMethod": "1",
-                "appType": "marspro"  # Paramètre spécifique MarsPro découvert
-            }
-
+    async def _make_request(self, endpoint, payload):
+        """Faire une requête avec les vrais paramètres capturés"""
+        import random
+        import time
+        
+        url = f"{self.base_url}{endpoint}"
+        
+        # Headers exacts capturés
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Dart/3.4 (dart:io)',  # VRAI USER-AGENT !
+            'systemdata': json.dumps({
+                "reqId": random.randint(10000000000, 99999999999),  # ID aléatoire
+                "appVersion": "1.3.2",
+                "osType": "android",
+                "osVersion": "15", 
+                "deviceType": "SM-S928B",
+                "deviceId": "AP3A.240905.015.A2",
+                "netType": "wifi",
+                "wifiName": "unknown",
+                "timestamp": int(time.time()),
+                "language": "French"
+            })
+        }
+        
+        _LOGGER.debug(f"MarsPro request to {url}")
+        _LOGGER.debug(f"Headers: {headers}")
+        _LOGGER.debug(f"Payload: {payload}")
+        
+        try:
             async with aiohttp.ClientSession() as session:
-                for endpoint in endpoints_to_try:
-                    try:
-                        full_url = f"{self.base_url}{endpoint}"
-                        _LOGGER.info(f"Tentative de connexion MarsPro via {full_url}")
+                async with session.post(url, json=payload, headers=headers, timeout=30) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        _LOGGER.debug(f"MarsPro response: {data}")
+                        return data
+                    else:
+                        _LOGGER.error(f"MarsPro HTTP error: {response.status}")
+                        return None
                         
-                        async with session.post(
-                            full_url,
-                            headers=headers,
-                            json=payload,
-                        ) as response:
-                            response.raise_for_status()
-                            data = await response.json()
-                            _LOGGER.info("MarsPro API Login Response: %s", json.dumps(data, indent=2))
-                            
-                            # CODES DE RÉPONSE DÉCOUVERTS:
-                            # "100" = Échec d'authentification (identifiants incorrects)
-                            # "000" = Succès (supposé, à confirmer avec vrais identifiants)
-                            if data.get("code") == "000":  # Code de succès supposé
-                                # Extraction du token
-                                if "data" in data and "token" in data["data"]:
-                                    self.token = data["data"]["token"]
-                                elif "token" in data:
-                                    self.token = data["token"]
-                                else:
-                                    raise Exception("Token not found in response")
-                                    
-                                self.last_login_time = now
-                                _LOGGER.info("MarsPro login successful, token obtained.")
-                                return
-                            elif data.get("code") == "100":
-                                # Code 100 = Échec d'authentification (découvert lors des tests)
-                                _LOGGER.warning(f"MarsPro authentication failed with endpoint {endpoint}: {data.get('msg', 'Invalid credentials')}")
-                                continue
-                            else:
-                                _LOGGER.warning(f"MarsPro login failed with endpoint {endpoint}: {data.get('msg', 'Unknown error')}")
-                                continue
-                                
-                    except aiohttp.ClientError as e:
-                        _LOGGER.warning(f"MarsPro login failed with endpoint {endpoint}: {str(e)}")
-                        continue
-                
-                # Si tous les endpoints échouent, essayer le fallback
-                _LOGGER.info("All MarsPro endpoints failed, attempting fallback to legacy MarsHydro API...")
-                await self._fallback_to_legacy_api()
+        except Exception as e:
+            _LOGGER.error(f"MarsPro request failed: {e}")
+            return None
+
+    async def login(self):
+        """Connexion avec les vrais paramètres"""
+        # Payload exact capturé
+        payload = {
+            "email": self.email,
+            "password": self.password, 
+            "loginMethod": "1"
+        }
+        
+        # Utiliser le seul endpoint qui marche
+        endpoint = "/api/android/ulogin/mailLogin/v1"
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get('code') == '000':
+            self.token = data['data']['token']
+            self.user_id = data['data']['userId']
+            _LOGGER.info("MarsPro authentication successful!")
+            return True
+        else:
+            error_msg = data.get('msg', 'Unknown error') if data else "No response"
+            _LOGGER.error(f"MarsPro authentication failed: {error_msg}")
+            raise Exception(f"MarsPro authentication failed: {error_msg}")
 
     async def _fallback_to_legacy_api(self):
         """Fallback to legacy MarsHydro API if MarsPro fails."""
