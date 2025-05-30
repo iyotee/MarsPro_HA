@@ -3,6 +3,7 @@ import json
 import time
 import logging
 import asyncio
+import random
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,27 +27,30 @@ class MarsProAPI:
 
     async def _make_request(self, endpoint, payload):
         """Faire une requête avec les vrais paramètres capturés"""
-        import random
-        import time
-        
         url = f"{self.base_url}{endpoint}"
         
         # Headers exacts capturés
+        systemdata = {
+            "reqId": random.randint(10000000000, 99999999999),  # ID aléatoire
+            "appVersion": "1.3.2",
+            "osType": "android",
+            "osVersion": "15", 
+            "deviceType": "SM-S928B",
+            "deviceId": "AP3A.240905.015.A2",
+            "netType": "wifi",
+            "wifiName": "unknown",
+            "timestamp": int(time.time()),
+            "language": "French"
+        }
+        
+        # Ajouter le token si disponible
+        if self.token:
+            systemdata["token"] = self.token
+        
         headers = {
             'Content-Type': 'application/json',
             'User-Agent': 'Dart/3.4 (dart:io)',  # VRAI USER-AGENT !
-            'systemdata': json.dumps({
-                "reqId": random.randint(10000000000, 99999999999),  # ID aléatoire
-                "appVersion": "1.3.2",
-                "osType": "android",
-                "osVersion": "15", 
-                "deviceType": "SM-S928B",
-                "deviceId": "AP3A.240905.015.A2",
-                "netType": "wifi",
-                "wifiName": "unknown",
-                "timestamp": int(time.time()),
-                "language": "French"
-            })
+            'systemdata': json.dumps(systemdata)
         }
         
         _LOGGER.debug(f"MarsPro request to {url}")
@@ -192,70 +196,49 @@ class MarsProAPI:
             # Si aucun endpoint ne fonctionne, retourner une erreur
             raise Exception("All MarsPro control endpoints failed")
 
-    async def _process_device_list(self, product_type):
-        """Retrieve device list for a given product type - MarsPro version."""
+    async def _process_device_list(self, device_product_group):
+        """Retrieve device list for a given product group - MarsPro version."""
         await self._ensure_token()
-        system_data = self._generate_system_data()
-        headers = {
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/json",
-            "Host": "api.lgledsolutions.com",
-            "User-Agent": "MarsPro/2.0.0",
-            "systemData": system_data,
-        }
         
-        # Payload adapté pour MarsPro
+        # Payload exact capturé !
         payload = {
-            "currentPage": 0, 
-            "type": None, 
-            "productType": product_type
+            "currentPage": 1,
+            "type": None,
+            "deviceProductGroup": device_product_group
         }
 
-        # Essayer différents endpoints de liste d'appareils
-        list_endpoints = [
-            "/udm/getDeviceList/v1",  # Endpoint legacy adapté
-            "/device/list",           # Endpoint hypothétique
-            "/api/device/list"        # Endpoint avec préfixe API
-        ]
-
-        async with aiohttp.ClientSession() as session:
-            for endpoint in list_endpoints:
-                try:
-                    full_url = f"{self.base_url}{endpoint}"
-                    async with session.post(
-                        full_url,
-                        headers=headers, 
-                        json=payload
-                    ) as response:
-                        response_json = await response.json()
-                        
-                        # Structure de réponse MarsPro
-                        if response_json.get("code") == "000":
-                            device_list = response_json.get("data", {}).get("devices", []) or response_json.get("data", {}).get("list", [])
-                            return device_list
-                        else:
-                            _LOGGER.warning(f"Device list failed with endpoint {endpoint}: {response_json.get('msg', 'Unknown error')}")
-                            continue
-                            
-                except Exception as e:
-                    _LOGGER.warning(f"Device list failed with endpoint {endpoint}: {e}")
-                    continue
-            
-            _LOGGER.error("All MarsPro device list endpoints failed")
+        # ENDPOINT EXACT QUI MARCHE !
+        endpoint = "/api/android/udm/getDeviceList/v1"
+        
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get("code") == "000":
+            device_list = data.get("data", {}).get("list", [])
+            _LOGGER.info(f"MarsPro found {len(device_list)} devices")
+            return device_list
+        else:
+            error_msg = data.get('msg', 'Unknown error') if data else "No response"
+            _LOGGER.error(f"Device list failed: {error_msg}")
             return []
 
     async def get_lightdata(self):
         """Retrieve light data from the MarsPro API."""
-        device_list = await self._process_device_list("LIGHT")
+        # Group 1 = Lumières (basé sur la capture)
+        device_list = await self._process_device_list(1)
         if device_list:
             device_data = device_list[0]
-            self.device_id = device_data.get("id") or device_data.get("deviceId")
+            self.device_id = device_data.get("id")
+            
+            # Mapping basé sur la vraie réponse capturée
             return {
-                "deviceName": device_data.get("deviceName") or device_data.get("name"),
-                "deviceLightRate": device_data.get("deviceLightRate") or device_data.get("brightness"),
-                "isClose": device_data.get("isClose") or device_data.get("isOff"),
+                "deviceName": device_data.get("deviceName"),
+                "deviceLightRate": device_data.get("lastLightRate", device_data.get("lightRate", 0)),
+                "isClose": device_data.get("isClose", False),
                 "id": self.device_id,
-                "deviceImage": device_data.get("deviceImg") or device_data.get("image"),
+                "deviceImage": device_data.get("deviceImg"),
+                "productType": device_data.get("productType"),
+                "deviceSerialnum": device_data.get("deviceSerialnum"),
+                "connectStatus": device_data.get("connectStatus")
             }
         else:
             _LOGGER.warning("No light devices found in MarsPro.")
@@ -263,19 +246,21 @@ class MarsProAPI:
 
     async def get_fandata(self):
         """Retrieve fan data from the MarsPro API."""
-        device_list = await self._process_device_list("WIND")
+        # Group 2 = Ventilateurs (hypothèse)
+        device_list = await self._process_device_list(2)
         if device_list:
             device_data = device_list[0]
             _LOGGER.debug("MarsPro fan data retrieved: %s", json.dumps(device_data, indent=2))
             return {
-                "deviceName": device_data.get("deviceName") or device_data.get("name"),
-                "deviceLightRate": device_data.get("deviceLightRate") or device_data.get("speed"),
+                "deviceName": device_data.get("deviceName"),
+                "deviceLightRate": device_data.get("lastLightRate", device_data.get("lightRate", 0)),
                 "humidity": device_data.get("humidity"),
                 "temperature": device_data.get("temperature"),
-                "speed": device_data.get("speed"),
-                "isClose": device_data.get("isClose") or device_data.get("isOff"),
-                "id": device_data.get("id") or device_data.get("deviceId"),
-                "deviceImage": device_data.get("deviceImg") or device_data.get("image"),
+                "speed": device_data.get("lastLightRate", device_data.get("lightRate", 0)),
+                "isClose": device_data.get("isClose", False),
+                "id": device_data.get("id"),
+                "deviceImage": device_data.get("deviceImg"),
+                "productType": device_data.get("productType")
             }
         else:
             _LOGGER.warning("No fan devices found in MarsPro.")
