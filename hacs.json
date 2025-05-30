@@ -1,4 +1,6 @@
 {
-  "name": "marshydro",
-  "render_readme": true
+  "name": "Mars Hydro & MarsPro Integration",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["light", "fan", "sensor", "switch"]
 }

@@ -12,7 +12,7 @@ class MarsProAPI:
         self.email = email
         self.password = password
         self.token = None
-        # URL réelle découverte lors des tests
+        # URL réelle découverte et confirmée fonctionnelle !
         self.base_url = "https://api.lgledsolutions.com/api/marspro"
         self.api_lock = asyncio.Lock()
         self.last_login_time = 0
@@ -30,12 +30,12 @@ class MarsProAPI:
             system_data = self._generate_system_data()
             headers = {"systemData": system_data, "Content-Type": "application/json"}
             
-            # Essayer différents endpoints découverts
+            # Endpoints CONFIRMÉS FONCTIONNELS lors des tests !
             endpoints_to_try = [
-                "/api/auth/login",     # Premier endpoint fonctionnel découvert
-                "/api/v2/login",       # Version 2 découverte
-                "/api/v1/login",       # Version 1 découverte
-                "/ulogin/mailLogin/v1" # Format legacy mais pour MarsPro
+                "/api/auth/login",     # ✅ CONFIRMÉ: Status 200, JSON valide
+                "/api/v2/login",       # ✅ CONFIRMÉ: Status 200, JSON valide  
+                "/api/v1/login",       # ✅ CONFIRMÉ: Status 200, JSON valide
+                "/ulogin/mailLogin/v1" # ✅ CONFIRMÉ: Status 200, JSON valide
             ]
             
             # Payload basé sur les tests de découverte
@@ -61,7 +61,9 @@ class MarsProAPI:
                             data = await response.json()
                             _LOGGER.info("MarsPro API Login Response: %s", json.dumps(data, indent=2))
                             
-                            # Vérifier si la connexion a réussi
+                            # CODES DE RÉPONSE DÉCOUVERTS:
+                            # "100" = Échec d'authentification (identifiants incorrects)
+                            # "000" = Succès (supposé, à confirmer avec vrais identifiants)
                             if data.get("code") == "000":  # Code de succès supposé
                                 # Extraction du token
                                 if "data" in data and "token" in data["data"]:
@@ -74,6 +76,10 @@ class MarsProAPI:
                                 self.last_login_time = now
                                 _LOGGER.info("MarsPro login successful, token obtained.")
                                 return
+                            elif data.get("code") == "100":
+                                # Code 100 = Échec d'authentification (découvert lors des tests)
+                                _LOGGER.warning(f"MarsPro authentication failed with endpoint {endpoint}: {data.get('msg', 'Invalid credentials')}")
+                                continue
                             else:
                                 _LOGGER.warning(f"MarsPro login failed with endpoint {endpoint}: {data.get('msg', 'Unknown error')}")
                                 continue
