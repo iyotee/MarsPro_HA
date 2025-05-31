@@ -1,127 +1,154 @@
-from homeassistant.core import HomeAssistant
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import device_registry as dr
-from .const import DOMAIN
+"""L'intégration MarsHydro pour Home Assistant avec support Bluetooth BLE."""
+import asyncio
 import logging
+from datetime import timedelta
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.components import bluetooth
+
+from .const import DOMAIN
+from .api_marspro import MarsProAPI
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "light", "switch", "fan"]  # Sensor hinzugefügt
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.SWITCH]
+
+SCAN_INTERVAL = timedelta(seconds=30)
 
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Setup für die Mars Hydro-Integration."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
+class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
+    """Coordinateur de données pour MarsHydro avec support Bluetooth BLE."""
+
+    def __init__(self, hass: HomeAssistant, api: MarsProAPI) -> None:
+        """Initialize the coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=SCAN_INTERVAL,
+        )
+        self.api = api
+        self.bluetooth_devices = {}
+        self.is_bluetooth_device = False
+
+    async def _async_update_data(self):
+        """Fetch data from API endpoint or Bluetooth."""
+        try:
+            # Essayer d'abord l'API cloud
+            light_data = await self.api.get_lightdata()
+            fan_data = await self.api.get_fandata()
+            
+            # Détecter si c'est un appareil Bluetooth
+            if light_data and light_data.get('connection_type') == 'bluetooth':
+                self.is_bluetooth_device = True
+                _LOGGER.info("Device detected as Bluetooth BLE")
+                
+                # Scanner les appareils Bluetooth BLE
+                await self._scan_bluetooth_devices()
+            
+            return {
+                "light": light_data,
+                "fan": fan_data,
+                "bluetooth_devices": self.bluetooth_devices
+            }
+            
+        except Exception as err:
+            raise UpdateFailed(f"Error communicating with API: {err}")
+
+    async def _scan_bluetooth_devices(self):
+        """Scanner les appareils Bluetooth BLE MarsPro."""
+        try:
+            # Utiliser le scanner Bluetooth intégré de Home Assistant
+            scanner = bluetooth.async_get_scanner(self.hass)
+            
+            if not scanner:
+                _LOGGER.warning("Bluetooth scanner not available")
+                return
+            
+            # Scanner pendant 10 secondes
+            devices = await scanner.async_discover(timeout=10.0)
+            
+            marspro_devices = []
+            for device in devices:
+                if self._is_marspro_device(device):
+                    marspro_devices.append(device)
+                    _LOGGER.info(f"Found MarsPro BLE device: {device.name} ({device.address})")
+            
+            self.bluetooth_devices = {
+                device.address: {
+                    'name': device.name or f"MarsPro {device.address[-4:]}",
+                    'address': device.address,
+                    'rssi': getattr(device, 'rssi', -50),
+                    'device': device
+                }
+                for device in marspro_devices
+            }
+            
+        except Exception as e:
+            _LOGGER.error(f"Bluetooth scan failed: {e}")
+
+    def _is_marspro_device(self, device) -> bool:
+        """Déterminer si un appareil BLE est un MarsPro."""
+        device_name = (device.name or "").lower()
+        device_addr = device.address.lower()
+        
+        # Patterns MarsPro connus
+        marspro_patterns = [
+            "mars", "pro", "mh-", "dimbox", "345f45ec73cc",
+            "led", "light", "grow"
+        ]
+        
+        # Vérifier le nom
+        for pattern in marspro_patterns:
+            if pattern in device_name:
+                return True
+        
+        # Vérifier l'adresse MAC (si elle contient des fragments du PID)
+        if "345f45" in device_addr.replace(":", ""):
+            return True
+        
+        return False
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Mars Hydro integration from a config entry."""
+    """Set up MarsHydro from a config entry."""
     email = entry.data["email"]
     password = entry.data["password"]
-    api_type = entry.data.get("api_type", "marshydro")  # Default à l'ancienne API pour la compatibilité
 
-    # Créer l'instance API appropriée selon le type choisi
-    if api_type == "marspro":
-        from .api_marspro import MarsProAPI
-        api = MarsProAPI(email, password)
-        manufacturer = "Mars Pro"
-        model_prefix = "MarsPro"
-        _LOGGER.info("Utilisation de l'API MarsPro")
-    else:
-        from .api import MarsHydroAPI
-        api = MarsHydroAPI(email, password)
-        manufacturer = "Mars Hydro"
-        model_prefix = "Mars Hydro"
-        _LOGGER.info("Utilisation de l'API MarsHydro (legacy)")
+    api = MarsProAPI(email, password)
+    
+    try:
+        await api.login()
+        _LOGGER.info("MarsHydro API connection successful")
+    except Exception as e:
+        _LOGGER.error(f"Failed to connect to MarsHydro API: {e}")
+        return False
 
-    await api.login()
+    coordinator = MarsHydroDataUpdateCoordinator(hass, api)
+    
+    # Fetch initial data
+    await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
         "api": api,
-        "api_type": api_type,
-        "manufacturer": manufacturer
     }
 
-    # Gerät registrieren
-    device_registry = dr.async_get(hass)
-
-    # Récupérer les données de l'appareil principal
-    device_data = await api.get_lightdata()
-    if device_data:
-        # Utiliser le PID stable comme identifiant au lieu de l'ID changeant
-        stable_pid = device_data.get("device_pid_stable") or device_data.get("deviceSerialnum") or str(device_data.get("id"))
-        device_name = device_data.get("deviceName", "Mars Device")
-        
-        # Déterminer le type d'appareil basé sur le nom et choisir les plateformes appropriées
-        device_name_lower = device_name.lower()
-        if "dimbox" in device_name_lower or "light" in device_name_lower:
-            device_type = "Light"
-            platforms_to_load = ["light", "sensor"]  # Seulement light + sensor pour les lampes
-            _LOGGER.info(f"Device detected as LIGHT: {device_name} - Loading light + sensor platforms only")
-        elif "fan" in device_name_lower or "wind" in device_name_lower:
-            device_type = "Fan" 
-            platforms_to_load = ["fan", "sensor", "switch"]  # Fan + sensor + switch pour les ventilateurs
-            _LOGGER.info(f"Device detected as FAN: {device_name} - Loading fan + sensor + switch platforms")
-        else:
-            device_type = "Light"  # Default to Light for unknown devices
-            platforms_to_load = ["light", "sensor"]  # Default: seulement light + sensor
-            _LOGGER.info(f"Device defaulted to LIGHT: {device_name} - Loading light + sensor platforms only")
-        
-        # Enregistrer UN SEUL appareil avec l'identifiant stable
-        device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, stable_pid)},  # Utiliser PID stable !
-            manufacturer=manufacturer,
-            name=device_name,
-            model=f"{model_prefix} {device_type}",
-        )
-        _LOGGER.info(f"Device {device_name} registered with stable PID: {stable_pid}")
-        
-        # Stocker les informations pour les entités
-        hass.data[DOMAIN][entry.entry_id]["device_type"] = device_type.lower()
-        hass.data[DOMAIN][entry.entry_id]["stable_pid"] = stable_pid
-        hass.data[DOMAIN][entry.entry_id]["platforms_to_load"] = platforms_to_load
-        
-    else:
-        _LOGGER.warning("No device found, registration skipped.")
-        platforms_to_load = ["light", "sensor"]  # Fallback par défaut
-
-    # Charger SEULEMENT les plateformes appropriées pour ce type d'appareil
-    await hass.config_entries.async_forward_entry_setups(entry, platforms_to_load)
+    # Setup platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Entferne eine Konfigurationsinstanz."""
-    _LOGGER.debug("Mars Hydro async_unload_entry wird aufgerufen")
-
-    # Utiliser les plateformes spécifiques qui ont été chargées pour cette entrée
-    platforms_to_unload = hass.data[DOMAIN][entry.entry_id].get("platforms_to_load", ["light", "sensor"])
+    """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms_to_unload)
-
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
-
-
-async def create_api_instance(hass: HomeAssistant, email: str, password: str, api_type: str = "marshydro"):
-    """Erstelle eine API-Instanz und führe den Login durch."""
-    try:
-        if api_type == "marspro":
-            from .api_marspro import MarsProAPI
-            api_instance = MarsProAPI(email, password)
-        else:
-            from .api import MarsHydroAPI
-            api_instance = MarsHydroAPI(email, password)
-            
-        await api_instance.login()
-        return api_instance
-    except Exception as e:
-        _LOGGER.error(f"Fehler beim Erstellen der API-Instanz ({api_type}): {e}")
-        return None

@@ -1,172 +1,303 @@
-# Mars Hydro Home Assistant Integration
+# 🌱 MarsHydro Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![GitHub Latest Release](https://img.shields.io/github/release/votre-username/marspro-homeassistant.svg)](https://github.com/votre-username/marspro-homeassistant/releases)
-[![GitHub All Releases](https://img.shields.io/github/downloads/votre-username/marspro-homeassistant/total.svg)](https://github.com/votre-username/marspro-homeassistant/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/your-repo/marshydro-ha)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-🌱 **Intégration Home Assistant pour les équipements Mars Hydro et MarsPro**
-
-Cette intégration permet de contrôler vos lampes de culture et ventilateurs Mars Hydro directement depuis Home Assistant, avec support complet pour les nouvelles API MarsPro.
+Integration Home Assistant pour les appareils d'éclairage **MarsHydro** et **MarsPro** avec support **Bluetooth BLE** et cloud.
 
 ## 🚀 Fonctionnalités
 
-### ✅ Support Complet
-- **🔥 MarsPro (Nouvelle API)** - Support natif de la nouvelle application MarsPro
-- **🏛️ Mars Hydro Legacy** - Compatibilité avec l'ancienne API Mars Hydro
-- **🔄 Fallback Automatique** - Bascule automatiquement entre les APIs si nécessaire
+### ✅ **Support Multi-Protocoles**
+- **🔵 Bluetooth BLE** - Contrôle direct et rapide  
+- **☁️ Cloud/WiFi** - Contrôle via Internet
+- **🔄 Détection automatique** du type d'appareil
 
-### 🎛️ Contrôles Disponibles
-- **💡 Lampes de Culture**
-  - Allumer/Éteindre
-  - Contrôle de la luminosité (0-100%)
-  - État temps réel
-- **🌪️ Ventilateurs**
-  - Allumer/Éteindre  
-  - Contrôle de la vitesse
-  - Monitoring température/humidité
+### ✅ **Appareils Supportés**
+- **MarsPro LED** (MH-DIMBOX-* séries)
+- **MarsHydro Legacy** (anciens modèles)
+- **Détection automatique** via API MarsPro
 
-### 🏠 Intégration Home Assistant
-- **Entités automatiques** - Lampes et ventilateurs ajoutés automatiquement
-- **Automatisations** - Programmez vos cycles de culture
-- **Interface graphique** - Contrôle via l'interface Home Assistant
-- **État en temps réel** - Synchronisation automatique
+### ✅ **Fonctionnalités Home Assistant**
+- **💡 Entités Light** avec contrôle luminosité
+- **🎛️ Interface graphique** native HA
+- **🤖 Automations** complètes
+- **📱 Dashboard** intégré
 
 ## 📦 Installation
 
-### Via HACS (Recommandé)
-1. Ouvrez HACS dans Home Assistant
-2. Allez dans "Intégrations"
-3. Cliquez sur "⋮" puis "Dépôts personnalisés"
-4. Ajoutez cette URL : `https://github.com/votre-username/marspro-homeassistant`
-5. Catégorie : "Integration"
-6. Redémarrez Home Assistant
+### **Via HACS (Recommandé)**
 
-### Installation Manuelle
-1. Téléchargez le dossier `custom_components/marshydro`
-2. Copiez-le dans `<config>/custom_components/`
-3. Redémarrez Home Assistant
+1. Ouvrir **HACS** dans Home Assistant
+2. Aller dans **Intégrations**
+3. Menu ⋮ → **Dépôts personnalisés**
+4. Ajouter : `https://github.com/your-repo/marshydro-ha`
+5. Type : **Intégration**
+6. **Installer** MarsHydro
+7. **Redémarrer** Home Assistant
+
+### **Installation Manuelle**
+
+1. Télécharger cette repository
+2. Copier `custom_components/marshydro` dans votre dossier HA
+3. Redémarrer Home Assistant
 
 ## ⚙️ Configuration
 
-### Via Interface Home Assistant
-1. Allez dans **Configuration** > **Intégrations**
-2. Cliquez **Ajouter une intégration**
-3. Cherchez **"Mars Hydro"**
-4. Choisissez votre type d'API :
-   - **MarsPro** (recommandé pour nouveaux comptes)
-   - **Mars Hydro Legacy** (anciens comptes)
-5. Entrez vos identifiants
+### **1. Prérequis Bluetooth BLE**
 
-### Via Configuration YAML
+Votre Home Assistant doit avoir accès au Bluetooth BLE :
+
+- **✅ Raspberry Pi 4** - Bluetooth intégré
+- **✅ Adaptateur USB BLE** - Sur serveur Linux 
+- **✅ ESP32 Bluetooth Proxy** - Via ESPHome
+
+### **2. Ajout de l'Intégration**
+
+1. **Paramètres** → **Appareils et services**
+2. **➕ Ajouter une intégration**
+3. Rechercher **"MarsHydro"**
+4. Saisir vos **credentials MarsPro** :
+   - 📧 Email
+   - 🔑 Mot de passe
+5. **✅ Terminer** - Appareils détectés automatiquement
+
+### **3. Entités Créées**
+
+L'intégration crée automatiquement :
+
+```yaml
+# Exemple d'entités créées
+light.marspro_led_cloud      # Contrôle via cloud
+light.marspro_led_ble        # Contrôle via Bluetooth BLE
+```
+
+## 🎮 Utilisation
+
+### **Interface Graphique**
+
+Les appareils apparaissent dans :
+- **🏠 Vue d'ensemble** - Cartes light standard
+- **💡 Lumières** - Section dédiée
+- **⚙️ Appareils** - Configuration avancée
+
+### **Automations**
+
+```yaml
+# Exemple automation - Lever du soleil
+automation:
+  - alias: "MarsPro - Lever du soleil"
+    trigger:
+      platform: sun
+      event: sunrise
+    action:
+      service: light.turn_on
+      target:
+        entity_id: light.marspro_led_ble
+      data:
+        brightness_pct: 100
+        transition: 60
+
+# Exemple automation - Soirée
+automation:
+  - alias: "MarsPro - Mode soirée"
+    trigger:
+      platform: time
+      at: "20:00:00"
+    action:
+      service: light.turn_on
+      target:
+        entity_id: light.marspro_led_ble
+      data:
+        brightness_pct: 30
+```
+
+### **Scripts**
+
+```yaml
+# Script - Séquence d'éclairage
+script:
+  marspro_sequence:
+    alias: "Séquence MarsPro"
+    sequence:
+      - service: light.turn_on
+        target:
+          entity_id: light.marspro_led_ble
+        data:
+          brightness_pct: 25
+      - delay: "00:30:00"
+      - service: light.turn_on
+        target:
+          entity_id: light.marspro_led_ble
+        data:
+          brightness_pct: 75
+      - delay: "00:30:00"
+      - service: light.turn_on
+        target:
+          entity_id: light.marspro_led_ble
+        data:
+          brightness_pct: 100
+```
+
+## 🔧 Configuration Avancée
+
+### **Configuration YAML (Optionnel)**
+
 ```yaml
 # configuration.yaml
 marshydro:
-  email: "votre@email.com"
+  email: "votre_email@example.com"
   password: "votre_mot_de_passe"
-  api_type: "marspro"  # ou "legacy"
+  scan_interval: 30  # secondes
+  bluetooth_timeout: 10  # secondes
 ```
 
-## 🎯 Exemples d'Utilisation
+### **Logs de Debugging**
 
-### Automatisation de Culture
-```yaml
-# Cycle jour/nuit automatique
-automation:
-  - alias: "Culture - Lever du soleil"
-    trigger:
-      platform: time
-      at: "07:00:00"
-    action:
-      - service: light.turn_on
-        target:
-          entity_id: light.mars_hydro_grow_light
-        data:
-          brightness_pct: 80
-      - service: fan.turn_on
-        target:
-          entity_id: fan.mars_hydro_ventilator
-
-  - alias: "Culture - Coucher du soleil"
-    trigger:
-      platform: time
-      at: "22:00:00"
-    action:
-      - service: light.turn_off
-        target:
-          entity_id: light.mars_hydro_grow_light
-      - service: fan.turn_off
-        target:
-          entity_id: fan.mars_hydro_ventilator
-```
-
-### Dashboard Lovelace
-```yaml
-# Carte contrôle de culture
-type: entities
-title: "🌱 Culture Mars Hydro"
-entities:
-  - entity: light.mars_hydro_grow_light
-  - entity: fan.mars_hydro_ventilator
-  - entity: sensor.mars_hydro_temperature
-  - entity: sensor.mars_hydro_humidity
-```
-
-## 🔧 Résolution de Problèmes
-
-### Erreurs de Connexion
-- **Code 100** : Identifiants incorrects
-- **SSL Error** : Problème de connectivité réseau
-- **Fallback activé** : Passage automatique à l'API legacy
-
-### Compte MarsPro
-1. Téléchargez l'app **MarsPro** (Android/iOS)
-2. Créez un compte avec votre email
-3. Connectez vos appareils dans l'app
-4. Utilisez les mêmes identifiants dans Home Assistant
-
-### Logs de Debug
 ```yaml
 # configuration.yaml
 logger:
+  default: warning
   logs:
     custom_components.marshydro: debug
 ```
 
-## 📱 Applications Supportées
+## 🔵 Spécificités Bluetooth BLE
 
-| Application | API Type | Status |
-|-------------|----------|--------|
-| **MarsPro** (Nouvelle) | `marspro` | ✅ Supporté |
-| **Mars Hydro** (Legacy) | `legacy` | ✅ Supporté |
+### **Avantages du BLE**
+- **⚡ Rapidité** - Contrôle instantané
+- **🔋 Économie** - Faible consommation
+- **📶 Fiabilité** - Pas de dépendance Internet
+- **🏠 Local** - Contrôle direct
+
+### **Configuration Bluetooth**
+
+#### **Raspberry Pi 4**
+```bash
+# Vérifier Bluetooth
+bluetoothctl show
+
+# Si nécessaire, activer
+sudo systemctl enable bluetooth
+sudo systemctl start bluetooth
+```
+
+#### **ESP32 Bluetooth Proxy**
+```yaml
+# ESPHome config
+esphome:
+  name: marspro-proxy
+
+esp32:
+  board: esp32dev
+
+wifi:
+  ssid: "VotreWiFi"
+  password: "VotreMotDePasse"
+
+api:
+  encryption:
+    key: "VotreCle"
+
+bluetooth_proxy:
+  active: true
+```
+
+## 🚨 Dépannage
+
+### **Problèmes Courants**
+
+#### **❌ Appareils non détectés**
+- Vérifier credentials MarsPro dans l'app officielle
+- S'assurer que l'appareil est en mode Bluetooth
+- Vérifier la portée BLE (~10m)
+
+#### **❌ Contrôle échoué**
+- Redémarrer l'intégration
+- Vérifier les logs : `Paramètres > Logs`
+- Tester via l'app MarsPro officielle
+
+#### **❌ Bluetooth indisponible**
+- Vérifier adaptateur BLE : `bluetoothctl show`
+- Redémarrer service : `sudo systemctl restart bluetooth`
+- Vérifier permissions Home Assistant
+
+### **Support Technique**
+
+1. **📊 Activer les logs debug**
+2. **📝 Consulter les logs** dans HA
+3. **🐛 Créer une issue** avec logs
+4. **💬 Poser une question** dans Discussions
 
 ## 🏗️ Architecture Technique
 
-- **Backend** : Firebase + REST API
-- **Endpoints** : `api.lgledsolutions.com`
-- **Auth** : Google OAuth + Email/Password
-- **Fallback** : Basculement automatique entre APIs
-- **Sync** : Temps réel avec rate limiting
+### **Flux de Données**
+
+```
+Home Assistant
+    ↓
+MarsHydro Integration
+    ↓
+┌─────────────────┬─────────────────┐
+│   Cloud API     │  Bluetooth BLE  │
+│  (MarsPro)      │   (Direct)      │
+└─────────────────┴─────────────────┘
+    ↓                       ↓
+☁️ Internet              🔵 BLE Radio
+    ↓                       ↓
+🌐 MarsPro Servers      📱 Appareil Direct
+    ↓
+💡 Appareil MarsPro
+```
+
+### **Composants**
+
+- **`__init__.py`** - Coordinateur principal
+- **`light.py`** - Entités lumières  
+- **`config_flow.py`** - Configuration UI
+- **`api_marspro.py`** - Client API MarsPro
+- **`const.py`** - Constantes
 
 ## 🤝 Contribution
 
-Les contributions sont les bienvenues ! 
+Contributions bienvenues ! 
 
-1. Fork le projet
-2. Créez une branche (`git checkout -b feature/nouvelle-fonctionnalite`)
-3. Commit vos changements (`git commit -m 'Ajout nouvelle fonctionnalité'`)
-4. Push vers la branche (`git push origin feature/nouvelle-fonctionnalite`)
-5. Ouvrez une Pull Request
+1. **🍴 Fork** le projet
+2. **🌿 Créer une branche** : `git checkout -b feature/amazing-feature`
+3. **✅ Commit** : `git commit -m 'Add amazing feature'`
+4. **📤 Push** : `git push origin feature/amazing-feature`
+5. **🔄 Pull Request**
+
+## 📜 Changelog
+
+### **v2.3.0** - Version Finale BLE
+- ✅ Support Bluetooth BLE complet
+- ✅ Détection automatique d'appareils  
+- ✅ Interface Home Assistant native
+- ✅ Contrôle hybride (cloud + BLE)
+- ✅ Configuration via UI
+
+### **v2.2.0** - API MarsPro
+- ✅ Intégration API MarsPro
+- ✅ Authentification améliorée
+- ✅ Détection automatique PIDs
+
+### **v2.0.0** - Refactorisation
+- ✅ Support MarsPro + MarsHydro
+- ✅ Code moderne Home Assistant
+- ✅ Configuration via UI
 
 ## 📄 Licence
 
-Ce projet est sous licence MIT. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
+Ce projet est sous licence **MIT** - voir [LICENSE](LICENSE) pour détails.
 
-## ⭐ Support
+## ⭐ Remerciements
 
-Si cette intégration vous aide, n'hésitez pas à ⭐ ce repo !
-
-Pour les problèmes et suggestions : [Issues GitHub](https://github.com/votre-username/marspro-homeassistant/issues)
+- **🏠 Home Assistant** - Plateforme domotique
+- **🔵 Bleak** - Librairie Bluetooth BLE Python
+- **🌱 MarsHydro/MarsPro** - Matériel d'éclairage
+- **👥 Communauté** - Tests et feedback
 
 ---
 
-**🌱 Cultivez intelligemment avec Home Assistant ! 🏠**
+**🌟 Si cette intégration vous aide, n'hésitez pas à mettre une ⭐ !**
