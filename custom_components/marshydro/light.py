@@ -12,7 +12,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.components import bluetooth
 
 from .const import DOMAIN
 
@@ -30,73 +29,78 @@ async def async_setup_entry(
 
     entities = []
 
-    # Entité principale (cloud/WiFi)
-    if coordinator.data and coordinator.data.get("light"):
-        entities.append(MarsHydroLight(coordinator, api, config_entry))
+    # Attendre que le coordinateur ait des données
+    if not coordinator.data:
+        _LOGGER.warning("No coordinator data available")
+        return
 
-    # Entités Bluetooth BLE
-    if coordinator.is_bluetooth_device and coordinator.bluetooth_devices:
-        for mac_address, device_info in coordinator.bluetooth_devices.items():
-            entities.append(
-                MarsHydroBluetoothLight(
-                    coordinator, api, config_entry, mac_address, device_info
-                )
+    devices = coordinator.data.get("devices", [])
+    light_devices = [device for device in devices if device['entity_type'] == 'light']
+    
+    _LOGGER.info(f"Setting up {len(light_devices)} light entities")
+
+    # Créer une entité pour chaque appareil light détecté
+    for device in light_devices:
+        device_id = device['id']
+        device_name = device['name']
+        device_pid = device['pid']
+        is_bluetooth = device['is_bluetooth']
+        
+        # Entité cloud (toujours créée)
+        cloud_entity = MarsHydroCloudLight(
+            coordinator, api, config_entry, device_id, device_name, device_pid
+        )
+        entities.append(cloud_entity)
+        _LOGGER.info(f"Created cloud light entity: {device_name} (ID: {device_id})")
+        
+        # Entité BLE (si appareil Bluetooth)
+        if is_bluetooth:
+            ble_entity = MarsHydroBluetoothLight(
+                coordinator, api, config_entry, device_id, device_name, device_pid
             )
+            entities.append(ble_entity)
+            _LOGGER.info(f"Created BLE light entity: {device_name} (ID: {device_id})")
 
-    async_add_entities(entities, update_before_add=True)
+    if entities:
+        async_add_entities(entities, update_before_add=True)
+        _LOGGER.info(f"Added {len(entities)} light entities to Home Assistant")
+    else:
+        _LOGGER.warning("No light entities to add")
 
 
-class MarsHydroLight(CoordinatorEntity, LightEntity):
-    """Entité light MarsHydro (cloud/WiFi)."""
+class MarsHydroCloudLight(CoordinatorEntity, LightEntity):
+    """Entité light MarsHydro (contrôle cloud/WiFi)."""
 
     _attr_color_mode = ColorMode.BRIGHTNESS
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_supported_features = LightEntityFeature.TRANSITION
 
-    def __init__(self, coordinator, api, config_entry):
-        """Initialize the light."""
+    def __init__(self, coordinator, api, config_entry, device_id, device_name, device_pid):
+        """Initialize the cloud light."""
         super().__init__(coordinator)
         self.api = api
         self._config_entry = config_entry
-        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_light"
+        self._device_id = device_id
+        self._device_name = device_name
+        self._device_pid = device_pid
+        self._attr_unique_id = f"marspro_{device_id}_cloud"
+        self._is_on = False
+        self._brightness = 255
 
     @property
     def name(self) -> str:
         """Return the display name of this light."""
-        if self.coordinator.data and self.coordinator.data.get("light"):
-            device_name = self.coordinator.data["light"].get("deviceName", "MarsHydro Light")
-            return device_name
-        return "MarsHydro Light"
+        return f"{self._device_name} (Cloud)"
 
     @property
     def is_on(self) -> bool:
         """Return true if light is on."""
-        if self.coordinator.data and self.coordinator.data.get("light"):
-            data = self.coordinator.data["light"]
-            # Vérifier plusieurs champs possibles pour l'état
-            return (
-                data.get("stat") == 1 or
-                data.get("on") == 1 or
-                data.get("switch") == 1 or
-                data.get("isOn", False)
-            )
-        return False
+        return self._is_on
 
     @property
     def brightness(self) -> int | None:
         """Return the brightness of this light between 0..255."""
-        if self.coordinator.data and self.coordinator.data.get("light"):
-            data = self.coordinator.data["light"]
-            # Vérifier plusieurs champs possibles pour la luminosité
-            pwm = (
-                data.get("pwm") or
-                data.get("brightness") or
-                data.get("lastBright") or
-                100
-            )
-            # Convertir de pourcentage (0-100) vers HA (0-255)
-            return int(pwm * 255 / 100)
-        return 255
+        return self._brightness
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Instruct the light to turn on."""
@@ -108,45 +112,41 @@ class MarsHydroLight(CoordinatorEntity, LightEntity):
         else:
             brightness_pct = 100
 
-        _LOGGER.info(f"Turning on light with brightness {brightness_pct}%")
+        _LOGGER.info(f"Turning on cloud light {self._device_name} with brightness {brightness_pct}%")
         
         try:
-            # Essayer le contrôle hybride (cloud + BLE)
-            if hasattr(self.api, 'control_device_hybrid'):
-                success = await self.api.control_device_hybrid(True, brightness_pct)
-            else:
-                # Fallback vers l'API standard
-                await self.api.set_brightness(brightness_pct)
-                success = True
+            # Utiliser la méthode control_device_by_pid
+            success = await self.api.control_device_by_pid(self._device_pid, True, brightness_pct)
             
             if success:
-                await self.coordinator.async_request_refresh()
+                self._is_on = True
+                self._brightness = brightness if brightness is not None else 255
+                self.async_write_ha_state()
+                _LOGGER.info(f"Successfully turned on cloud light {self._device_name}")
             else:
-                _LOGGER.error("Failed to turn on light")
+                _LOGGER.error(f"Failed to turn on cloud light {self._device_name}")
                 
         except Exception as e:
-            _LOGGER.error(f"Error turning on light: {e}")
+            _LOGGER.error(f"Error turning on cloud light {self._device_name}: {e}")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Instruct the light to turn off."""
-        _LOGGER.info("Turning off light")
+        _LOGGER.info(f"Turning off cloud light {self._device_name}")
         
         try:
-            # Essayer le contrôle hybride (cloud + BLE)
-            if hasattr(self.api, 'control_device_hybrid'):
-                success = await self.api.control_device_hybrid(False, 0)
-            else:
-                # Fallback vers toggle_switch
-                await self.api.toggle_switch(True, "")
-                success = True
+            # Utiliser control_device_by_pid avec PWM 0
+            success = await self.api.control_device_by_pid(self._device_pid, False, 0)
             
             if success:
-                await self.coordinator.async_request_refresh()
+                self._is_on = False
+                self._brightness = 0
+                self.async_write_ha_state()
+                _LOGGER.info(f"Successfully turned off cloud light {self._device_name}")
             else:
-                _LOGGER.error("Failed to turn off light")
+                _LOGGER.error(f"Failed to turn off cloud light {self._device_name}")
                 
         except Exception as e:
-            _LOGGER.error(f"Error turning off light: {e}")
+            _LOGGER.error(f"Error turning off cloud light {self._device_name}: {e}")
 
 
 class MarsHydroBluetoothLight(CoordinatorEntity, LightEntity):
@@ -156,21 +156,22 @@ class MarsHydroBluetoothLight(CoordinatorEntity, LightEntity):
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_supported_features = LightEntityFeature.TRANSITION
 
-    def __init__(self, coordinator, api, config_entry, mac_address, device_info):
+    def __init__(self, coordinator, api, config_entry, device_id, device_name, device_pid):
         """Initialize the Bluetooth light."""
         super().__init__(coordinator)
         self.api = api
         self._config_entry = config_entry
-        self._mac_address = mac_address
-        self._device_info = device_info
-        self._attr_unique_id = f"{DOMAIN}_{mac_address.replace(':', '')}_ble_light"
+        self._device_id = device_id
+        self._device_name = device_name
+        self._device_pid = device_pid
+        self._attr_unique_id = f"marspro_{device_id}_ble"
         self._is_on = False
         self._brightness = 255
 
     @property
     def name(self) -> str:
         """Return the display name of this light."""
-        return f"{self._device_info['name']} (BLE)"
+        return f"{self._device_name} (BLE)"
 
     @property
     def is_on(self) -> bool:
@@ -185,102 +186,54 @@ class MarsHydroBluetoothLight(CoordinatorEntity, LightEntity):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        # Vérifier la disponibilité Bluetooth
-        return self._mac_address in self.coordinator.bluetooth_devices
+        # L'entité BLE est disponible si le scan Bluetooth a trouvé des appareils
+        return len(self.coordinator.bluetooth_devices) > 0
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Instruct the light to turn on via Bluetooth BLE."""
         brightness = kwargs.get(ATTR_BRIGHTNESS, 255)
         brightness_pct = int(brightness * 100 / 255)
         
-        _LOGGER.info(f"Turning on BLE light {self._mac_address} with brightness {brightness_pct}%")
+        _LOGGER.info(f"Turning on BLE light {self._device_name} with brightness {brightness_pct}%")
         
         try:
-            success = await self._control_ble_device(True, brightness_pct)
+            # Essayer de contrôler via BLE (si méthode disponible)
+            if hasattr(self.api, 'control_device_ble'):
+                success = await self.api.control_device_ble(self._device_pid, True, brightness_pct)
+            else:
+                # Fallback vers contrôle cloud
+                success = await self.api.control_device_by_pid(self._device_pid, True, brightness_pct)
             
             if success:
                 self._is_on = True
                 self._brightness = brightness
                 self.async_write_ha_state()
+                _LOGGER.info(f"Successfully turned on BLE light {self._device_name}")
             else:
-                _LOGGER.error(f"Failed to turn on BLE light {self._mac_address}")
+                _LOGGER.error(f"Failed to turn on BLE light {self._device_name}")
                 
         except Exception as e:
-            _LOGGER.error(f"Error turning on BLE light {self._mac_address}: {e}")
+            _LOGGER.error(f"Error turning on BLE light {self._device_name}: {e}")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Instruct the light to turn off via Bluetooth BLE."""
-        _LOGGER.info(f"Turning off BLE light {self._mac_address}")
+        _LOGGER.info(f"Turning off BLE light {self._device_name}")
         
         try:
-            success = await self._control_ble_device(False, 0)
+            # Essayer de contrôler via BLE (si méthode disponible)
+            if hasattr(self.api, 'control_device_ble'):
+                success = await self.api.control_device_ble(self._device_pid, False, 0)
+            else:
+                # Fallback vers contrôle cloud
+                success = await self.api.control_device_by_pid(self._device_pid, False, 0)
             
             if success:
                 self._is_on = False
+                self._brightness = 0
                 self.async_write_ha_state()
+                _LOGGER.info(f"Successfully turned off BLE light {self._device_name}")
             else:
-                _LOGGER.error(f"Failed to turn off BLE light {self._mac_address}")
+                _LOGGER.error(f"Failed to turn off BLE light {self._device_name}")
                 
         except Exception as e:
-            _LOGGER.error(f"Error turning off BLE light {self._mac_address}: {e}")
-
-    async def _control_ble_device(self, on: bool, brightness_pct: int) -> bool:
-        """Contrôler l'appareil directement via Bluetooth BLE."""
-        try:
-            # Utiliser le scanner Bluetooth de Home Assistant
-            ble_device = bluetooth.async_ble_device_from_address(self.hass, self._mac_address)
-            
-            if not ble_device:
-                _LOGGER.error(f"BLE device {self._mac_address} not found")
-                return False
-
-            # Utiliser la méthode BLE de l'API si disponible
-            if hasattr(self.api, '_ble_control_device'):
-                self.api.ble_device = ble_device
-                return await self.api._ble_control_device(on, brightness_pct)
-            else:
-                # Implémentation BLE directe simplifiée
-                return await self._simple_ble_control(ble_device, on, brightness_pct)
-                
-        except Exception as e:
-            _LOGGER.error(f"BLE control failed: {e}")
-            return False
-
-    async def _simple_ble_control(self, ble_device, on: bool, brightness_pct: int) -> bool:
-        """Implémentation BLE directe simplifiée."""
-        try:
-            from bleak import BleakClient
-            
-            async with BleakClient(ble_device.address) as client:
-                _LOGGER.info(f"Connected to BLE device {ble_device.address}")
-                
-                # Obtenir les services
-                services = await client.get_services()
-                
-                # Chercher une caractéristique d'écriture
-                write_char = None
-                for service in services.services:
-                    for char in service.characteristics:
-                        if "write" in char.properties:
-                            write_char = char
-                            break
-                    if write_char:
-                        break
-                
-                if not write_char:
-                    _LOGGER.error("No writable characteristic found")
-                    return False
-                
-                # Protocole simple : [on_byte, brightness_byte]
-                pwm_byte = min(255, brightness_pct * 255 // 100)
-                on_byte = 0x01 if on else 0x00
-                data = bytes([on_byte, pwm_byte])
-                
-                await client.write_gatt_char(write_char.uuid, data)
-                _LOGGER.info(f"BLE command sent: on={on}, brightness={brightness_pct}%")
-                
-                return True
-                
-        except Exception as e:
-            _LOGGER.error(f"Simple BLE control failed: {e}")
-            return False
+            _LOGGER.error(f"Error turning off BLE light {self._device_name}: {e}")
