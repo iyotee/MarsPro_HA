@@ -18,7 +18,8 @@ class MarsHydroBrightnessLight(LightEntity):
 
     def __init__(self, api, entry_id):
         self._api = api
-        self._device_id = None  # To store the dynamic device_id
+        self._device_id = None  # To store the dynamic device_id (for logging)
+        self._stable_pid = None  # To store the stable PID (for identifiers)
         self._device_name = None  # To store the dynamic deviceName
         self._brightness = None
         self._available = False
@@ -27,10 +28,8 @@ class MarsHydroBrightnessLight(LightEntity):
 
     @property
     def name(self):
-        """Return the name of the light, dynamically including the device name and ID."""
-        if self._device_name and self._device_id:
-            return f"{self._device_name} ({self._device_id})"
-        elif self._device_name:
+        """Return the name of the light, dynamically including the device name."""
+        if self._device_name:
             return self._device_name
         return "Mars Hydro Brightness Light"
 
@@ -51,24 +50,24 @@ class MarsHydroBrightnessLight(LightEntity):
 
     @property
     def unique_id(self):
-        """Return a unique ID for the light."""
+        """Return a unique ID for the light using stable PID."""
         return (
-            f"{self._entry_id}_light_{self._device_id}"
-            if self._device_id
+            f"{self._entry_id}_light_{self._stable_pid}"
+            if self._stable_pid
             else f"{self._entry_id}_light"
         )
 
     @property
     def device_info(self):
         """Return device information for linking with the device registry."""
-        if not self._device_id or not self._device_name:
+        if not self._stable_pid or not self._device_name:
             return None
 
         return {
             "identifiers": {
-                (DOMAIN, self._device_id)
-            },  # Match the registered device ID
-            "name": self._device_name,  # Use the dynamic deviceName
+                (DOMAIN, self._stable_pid)  # Use stable PID for device linking
+            },
+            "name": self._device_name,
             "manufacturer": "Mars Hydro",
             "model": "Mars Hydro Light",
         }
@@ -124,18 +123,30 @@ class MarsHydroBrightnessLight(LightEntity):
         try:
             light_data = await self._api.safe_api_call(self._api.get_lightdata)
             if light_data:
-                self._device_id = light_data[
-                    "id"
-                ]  # Set device_id dynamically from the API response
-                self._device_name = light_data[
-                    "deviceName"
-                ]  # Set deviceName dynamically
-                self._brightness = int((light_data["deviceLightRate"] / 100) * 255)
-                self._state = not light_data["isClose"]
+                # Récupérer l'ID pour le logging et le PID stable pour les identifiants
+                self._device_id = light_data.get("id")  # For logging only
+                self._stable_pid = (light_data.get("device_pid_stable") or 
+                                  light_data.get("deviceSerialnum") or 
+                                  str(light_data.get("id", "")))  # Stable identifier
+                self._device_name = light_data.get("deviceName")
+                
+                # Gérer deviceLightRate qui peut être -1
+                light_rate = light_data.get("deviceLightRate", 0)
+                if light_rate == -1:
+                    # Si deviceLightRate est -1, utiliser une valeur par défaut basée sur isClose
+                    if light_data.get("isClose", False):
+                        self._brightness = 0  # Device is OFF
+                        self._state = False
+                    else:
+                        self._brightness = 255  # Device is ON, assume full brightness
+                        self._state = True
+                else:
+                    # Utiliser la valeur normale
+                    self._brightness = int((light_rate / 100) * 255)
+                    self._state = not light_data.get("isClose", False)
+                
                 self._available = True
-                _LOGGER.info(
-                    f"Updated light: {self._device_name}, brightness: {self._brightness}"
-                )
+                _LOGGER.info(f"Updated light: {self._device_name} (PID: {self._stable_pid}), brightness: {self._brightness}, state: {self._state}")
             else:
                 self._available = False
                 self._state = None

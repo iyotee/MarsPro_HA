@@ -48,37 +48,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Gerät registrieren
     device_registry = dr.async_get(hass)
 
-    # Light-Gerät registrieren
-    light_data = await api.get_lightdata()
-    if light_data:
+    # Récupérer les données de l'appareil principal
+    device_data = await api.get_lightdata()
+    if device_data:
+        # Utiliser le PID stable comme identifiant au lieu de l'ID changeant
+        stable_pid = device_data.get("device_pid_stable") or device_data.get("deviceSerialnum") or str(device_data.get("id"))
+        device_name = device_data.get("deviceName", "Mars Device")
+        
+        # Déterminer le type d'appareil basé sur le nom
+        device_name_lower = device_name.lower()
+        if "dimbox" in device_name_lower or "light" in device_name_lower:
+            device_type = "Light"
+            _LOGGER.info(f"Device detected as LIGHT: {device_name}")
+        elif "fan" in device_name_lower or "wind" in device_name_lower:
+            device_type = "Fan" 
+            _LOGGER.info(f"Device detected as FAN: {device_name}")
+        else:
+            device_type = "Light"  # Default to Light for DIMBOX devices
+            _LOGGER.info(f"Device defaulted to LIGHT: {device_name}")
+        
+        # Enregistrer UN SEUL appareil avec l'identifiant stable
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, light_data["id"])},
+            identifiers={(DOMAIN, stable_pid)},  # Utiliser PID stable !
             manufacturer=manufacturer,
-            name=light_data["deviceName"],
-            model=f"{model_prefix} Light",
+            name=device_name,
+            model=f"{model_prefix} {device_type}",
         )
-        _LOGGER.info(
-            f"Light Device {light_data['deviceName']} wurde erfolgreich registriert."
-        )
+        _LOGGER.info(f"Device {device_name} registered with stable PID: {stable_pid}")
+        
+        # Stocker les informations pour les entités
+        hass.data[DOMAIN][entry.entry_id]["device_type"] = device_type.lower()
+        hass.data[DOMAIN][entry.entry_id]["stable_pid"] = stable_pid
+        
     else:
-        _LOGGER.warning("Kein Light-Gerät gefunden, Registrierung übersprungen.")
-
-    # Fan-Gerät registrieren
-    fan_data = await api.get_fandata()
-    if fan_data:
-        device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, fan_data["id"])},
-            manufacturer=manufacturer,
-            name=fan_data["deviceName"],
-            model=f"{model_prefix} Fan",
-        )
-        _LOGGER.info(
-            f"Fan Device {fan_data['deviceName']} wurde erfolgreich registriert."
-        )
-    else:
-        _LOGGER.warning("Kein Fan-Gerät gefunden, Registrierung übersprungen.")
+        _LOGGER.warning("No device found, registration skipped.")
 
     # Plattformen laden
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

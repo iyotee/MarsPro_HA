@@ -228,64 +228,86 @@ class MarsProAPI:
             return []
 
     async def get_all_devices(self):
-        """Récupérer tous les appareils disponibles avec leurs PIDs réels"""
+        """Récupérer tous les appareils disponibles avec leurs PIDs réels - TOUS GROUPES"""
         await self._ensure_token()
 
-        # Payload EXACT découvert dans les captures d'écran de l'utilisateur !
-        # L'app MarsPro utilise deviceProductGroup pour catégoriser les appareils
-        # deviceProductGroup: 1 = Appareils Bluetooth/classiques (trouvé !)
-        payload = {
-            "currentPage": 1,
-            "type": None,
-            "deviceProductGroup": 1  # Valeur correcte pour appareils Bluetooth
-        }
+        all_devices = []
         
-        endpoint = self.endpoints["device_list"]
-        data = await self._make_request(endpoint, payload)
+        # Tester tous les groupes d'appareils possibles
+        # Basé sur l'analyse des captures d'écran utilisateur
+        device_groups_to_test = [
+            1,    # Appareils Bluetooth (confirmé fonctionnel)
+            2,    # Appareils WiFi (vu dans captures)
+            3,    # Appareils Hybrides
+            4,    # Appareils Pro
+            5,    # Appareils Enterprise
+            None  # Tous appareils (fallback)
+        ]
         
-        if data and data.get('code') == '000':
-            devices = data.get('data', {}).get('list', [])
-            _LOGGER.info(f"MarsPro found {len(devices)} total devices (Bluetooth)")
+        _LOGGER.info("Searching devices in all product groups...")
+        
+        for group_id in device_groups_to_test:
+            payload = {
+                "currentPage": 1,
+                "type": None,
+                "deviceProductGroup": group_id
+            }
             
-            # Log des informations détaillées sur chaque appareil
-            for i, device in enumerate(devices):
-                name = device.get("deviceName", "N/A")
-                device_id = device.get("id", "N/A")
-                pid = device.get("devicePid", "N/A") or device.get("deviceSerialnum", "N/A")
-                
-                # Extraire le PID du nom si pas disponible dans les champs standards
-                if pid == "N/A" or not pid:
-                    # Le nom contient souvent le PID: "MH-DIMBOX-345F45EC73CC"
-                    pid_match = re.search(r'([A-F0-9]{12})$', name)
-                    if pid_match:
-                        pid = pid_match.group(1)
-                        _LOGGER.info(f"Extracted PID from device name: {pid}")
-                
-                is_online = device.get("isOnline", "N/A")
-                is_net_device = device.get("isNetDevice", False)
-                device_mode = device.get("deviceMode", "N/A")
-                _LOGGER.info(f"Device {i+1}: {name} (ID: {device_id}, PID: {pid}) - Online: {is_online}, NetDevice: {is_net_device}, Mode: {device_mode}")
+            endpoint = self.endpoints["device_list"]
+            data = await self._make_request(endpoint, payload)
             
-            return devices
+            if data and data.get('code') == '000':
+                devices = data.get('data', {}).get('list', [])
+                if devices:
+                    _LOGGER.info(f"MarsPro found {len(devices)} devices in group {group_id}")
+                    
+                    # Traiter chaque appareil
+                    for i, device in enumerate(devices):
+                        name = device.get("deviceName", "N/A")
+                        device_id = device.get("id", "N/A")
+                        pid = device.get("devicePid", "N/A") or device.get("deviceSerialnum", "N/A")
+                        
+                        # Extraire le PID du nom si pas disponible dans les champs standards
+                        if pid == "N/A" or not pid:
+                            # Le nom contient souvent le PID: "MH-DIMBOX-345F45EC73CC"
+                            pid_match = re.search(r'([A-F0-9]{12})$', name)
+                            if pid_match:
+                                pid = pid_match.group(1)
+                                device["extracted_pid"] = pid
+                                _LOGGER.info(f"Extracted PID from device name: {pid}")
+                        
+                        is_online = device.get("isOnline", "N/A")
+                        is_net_device = device.get("isNetDevice", False)
+                        device_mode = device.get("deviceMode", "N/A")
+                        device_type = device.get("deviceType", "N/A")
+                        
+                        # Ajouter metadata de groupe
+                        device["deviceProductGroup"] = group_id
+                        device["connection_type"] = "WiFi" if is_net_device else "Bluetooth"
+                        
+                        _LOGGER.info(f"Device {i+1} (Group {group_id}): {name} (ID: {device_id}, PID: {pid}) - Online: {is_online}, Type: {device['connection_type']}")
+                        
+                        # Éviter les doublons (même ID)
+                        if not any(d.get('id') == device_id for d in all_devices):
+                            all_devices.append(device)
+                    
+                else:
+                    _LOGGER.debug(f"No devices found in group {group_id}")
+            else:
+                _LOGGER.debug(f"Failed to query group {group_id}: {data}")
+        
+        if all_devices:
+            _LOGGER.info(f"MarsPro total devices found: {len(all_devices)} across all groups")
+            
+            # Statistiques par type de connexion
+            bluetooth_count = len([d for d in all_devices if d.get('connection_type') == 'Bluetooth'])
+            wifi_count = len([d for d in all_devices if d.get('connection_type') == 'WiFi'])
+            
+            _LOGGER.info(f"Device breakdown: {bluetooth_count} Bluetooth, {wifi_count} WiFi")
+            
+            return all_devices
         else:
-            # Si deviceProductGroup: 1 ne donne rien, essayer d'autres valeurs
-            _LOGGER.warning("No devices found with deviceProductGroup: 1, trying other values...")
-            
-            for group_id in [2, 3, 4, 5, None]:
-                payload_alt = {
-                    "currentPage": 1,
-                    "type": None,
-                    "deviceProductGroup": group_id
-                }
-                
-                data_alt = await self._make_request(endpoint, payload_alt)
-                if data_alt and data_alt.get('code') == '000':
-                    devices_alt = data_alt.get('data', {}).get('list', [])
-                    if devices_alt:
-                        _LOGGER.info(f"Found {len(devices_alt)} devices with deviceProductGroup: {group_id}")
-                        return devices_alt
-            
-            _LOGGER.warning("No devices found in MarsPro with any deviceProductGroup")
+            _LOGGER.warning("No devices found in MarsPro across all groups")
             return []
 
     async def get_lightdata(self):
@@ -298,12 +320,19 @@ class MarsProAPI:
         if devices:
             # Prendre le premier dispositif comme dispositif principal
             device = devices[0]
-            # Gérer les différents champs de PID selon le type d'appareil
-            self.device_serial = (device.get("devicePid") or 
+            
+            # Priorité au PID extrait, puis aux champs standards
+            self.device_serial = (device.get("extracted_pid") or 
                                 device.get("deviceSerialnum") or 
+                                device.get("devicePid") or 
                                 str(device.get("id", "")))
             
             _LOGGER.info(f"MarsPro device found: {device.get('deviceName')} (ID: {device.get('id')}, PID: {self.device_serial})")
+            
+            # Ajouter le PID extrait au device pour Home Assistant
+            device["deviceSerialnum"] = self.device_serial
+            device["device_pid_stable"] = self.device_serial
+            
             return device
         
         _LOGGER.warning("No devices found in MarsPro, trying fallback...")
