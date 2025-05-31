@@ -16,10 +16,14 @@ class MarsProAPI:
         self.user_id = None
         self.base_url = "https://mars-pro.api.lgledsolutions.com"  # URL CORRECTE !
         
-        # Endpoints découverts
-        self.endpoints = [
-            "/api/android/ulogin/mailLogin/v1",  # ENDPOINT QUI MARCHE !
-        ]
+        # Endpoints découverts et confirmés fonctionnels
+        self.endpoints = {
+            "login": "/api/android/ulogin/mailLogin/v1",  # ENDPOINT QUI MARCHE !
+            "device_list": "/api/android/udm/getDeviceList/v1",  # ENDPOINT CONFIRMÉ !
+            "device_detail": "/api/android/udm/getDeviceDetail/v1",  # ENDPOINT CONFIRMÉ !
+            "mine_info": "/api/android/mine/info/v1",  # ENDPOINT CONFIRMÉ !
+            "device_control": "/api/upData/device"  # ENDPOINT RÉEL CAPTURÉ !
+        }
         self.api_lock = asyncio.Lock()
         self.last_login_time = 0
         self.login_interval = 300  # Minimum interval between logins in seconds
@@ -29,17 +33,18 @@ class MarsProAPI:
         """Faire une requête avec les vrais paramètres capturés"""
         url = f"{self.base_url}{endpoint}"
         
-        # Headers exacts capturés
+        # Headers exacts capturés de l'app MarsPro RÉELLE !
         systemdata = {
-            "reqId": random.randint(10000000000, 99999999999),  # ID aléatoire
-            "appVersion": "1.3.2",
+            "reqId": str(random.randint(10000000000, 99999999999)),
+            "appVersion": "1.3.2",  # Version exacte de l'app
             "osType": "android",
-            "osVersion": "15", 
-            "deviceType": "SM-S928B",
-            "deviceId": "AP3A.240905.015.A2",
+            "osVersion": "15",      # Version exacte capturée
+            "deviceType": "SM-S928B",  # Type exact capturé
+            "deviceId": "AP3A.240905.015.A2",  # ID exact capturé
             "netType": "wifi",
-            "wifiName": "unknown",
-            "timestamp": int(time.time()),
+            "wifiName": "unknown",  # Valeur exacte capturée
+            "timestamp": str(int(time.time())),
+            "timezone": "34",       # Timezone exacte capturée
             "language": "French"
         }
         
@@ -49,7 +54,7 @@ class MarsProAPI:
         
         headers = {
             'Content-Type': 'application/json',
-            'User-Agent': 'Dart/3.4 (dart:io)',  # VRAI USER-AGENT !
+            'User-Agent': 'Dart/3.4 (dart:io)',  # User-Agent exact capturé
             'systemdata': json.dumps(systemdata)
         }
         
@@ -73,19 +78,19 @@ class MarsProAPI:
             return None
 
     async def login(self):
-        """Connexion avec les vrais paramètres"""
-        # Payload exact capturé
+        """Connexion avec les vrais paramètres découverts"""
+        # Payload exact basé sur l'analyse réseau
         payload = {
             "email": self.email,
             "password": self.password, 
-            "loginMethod": "1"
+            "loginMethod": "1"  # Méthode email/password
         }
         
-        # Utiliser le seul endpoint qui marche
-        endpoint = "/api/android/ulogin/mailLogin/v1"
+        # Utiliser l'endpoint de login confirmé fonctionnel
+        endpoint = self.endpoints["login"]
         data = await self._make_request(endpoint, payload)
         
-        if data and data.get('code') == '000':
+        if data and data.get('code') == '000':  # Code de succès MarsPro
             self.token = data['data']['token']
             self.user_id = data['data']['userId']
             _LOGGER.info("MarsPro authentication successful!")
@@ -113,18 +118,32 @@ class MarsProAPI:
             spec.loader.exec_module(legacy_module)
             
             # Créer une instance de l'API legacy
-            legacy_api = legacy_module.MarsHydroAPI(self.email, self.password)
-            await legacy_api.login()
+            self.legacy_api = legacy_module.MarsHydroAPI(self.email, self.password)
+            await self.legacy_api.login()
             
             # Copier les données importantes
-            self.token = legacy_api.token
-            self.base_url = legacy_api.base_url
+            self.token = self.legacy_api.token
+            self.legacy_base_url = self.legacy_api.base_url
             
             _LOGGER.info("Fallback to legacy API successful")
             
         except Exception as e:
             _LOGGER.error(f"Fallback to legacy API failed: {e}")
             raise Exception(f"Both MarsPro and legacy MarsHydro APIs failed. MarsPro: No valid credentials, Legacy: {e}")
+
+    async def _fallback_get_lightdata(self):
+        """Récupérer les données d'éclairage via l'API legacy"""
+        if hasattr(self, 'legacy_api'):
+            return await self.legacy_api.get_lightdata()
+        else:
+            raise Exception("Legacy API not initialized")
+
+    async def _fallback_get_fandata(self):
+        """Récupérer les données de ventilateur via l'API legacy"""
+        if hasattr(self, 'legacy_api'):
+            return await self.legacy_api.get_fandata()
+        else:
+            raise Exception("Legacy API not initialized")
 
     async def safe_api_call(self, func, *args, **kwargs):
         """Ensure thread-safe API calls."""
@@ -137,34 +156,50 @@ class MarsProAPI:
             await self.login()
 
     async def toggle_switch(self, is_close: bool, device_id: str):
-        """Toggle the light or fan switch (on/off) - MarsPro version."""
+        """Toggle the light or fan switch (on/off) - MarsPro version avec format EXACT des captures."""
         await self._ensure_token()
 
-        # Format pour allumer/éteindre (hypothèse basée sur le pattern découvert)
-        payload = {
-            "data": {
-                "method": "upDataStatus", 
-                "params": {
-                    "status": "0" if is_close else "1",  # 0=éteint, 1=allumé
-                    "deviceId": str(device_id)
-                }
+        # Si pas de device_serial, récupérer les données du dispositif
+        if not hasattr(self, 'device_serial') or not self.device_serial:
+            device_data = await self.get_lightdata()
+            if not device_data:
+                _LOGGER.error("Cannot toggle switch: no device data available")
+                return
+
+        # Utiliser le PID fourni ou celui récupéré automatiquement
+        target_pid = device_id if device_id else self.device_serial
+        
+        if not target_pid:
+            _LOGGER.error("No device PID available for control")
+            return
+
+        # Utiliser la nouvelle méthode de contrôle par PID
+        success = await self.control_device_by_pid(target_pid, not is_close, 100)
+        
+        if success:
+            _LOGGER.info(f"MarsPro switch toggle successful (PID: {target_pid})")
+            return {"code": "000", "msg": "success"}
+        else:
+            _LOGGER.warning("MarsPro control failed, trying fallback...")
+            return await self._legacy_toggle_switch(is_close, device_id)
+
+    async def _legacy_toggle_switch(self, is_close: bool, device_id: str):
+        """Méthode de contrôle legacy en fallback avec format outletCtrl"""
+        # Format legacy conservé comme fallback
+        inner_data = {
+            "method": "outletCtrl",
+            "params": {
+                "pid": self.device_serial,
+                "num": 0,
+                "on": 0 if is_close else 1,
+                "pwm": 100
             }
         }
-
-        _LOGGER.debug(f"MarsPro toggle switch payload: {json.dumps(payload, indent=2)}")
-
-        # ENDPOINT EXACT QUI MARCHE !
-        endpoint = "/api/upData/device"
         
-        data = await self._make_request(endpoint, payload)
+        payload = {"data": json.dumps(inner_data)}
+        endpoint = "/api/upData/device"  # Endpoint legacy
         
-        if data and data.get("code") == "000":
-            _LOGGER.info(f"MarsPro switch {'OFF' if is_close else 'ON'} successfully")
-            return data
-        else:
-            error_msg = data.get('msg', 'Unknown error') if data else "No response"
-            _LOGGER.error(f"MarsPro switch control failed: {error_msg}")
-            raise Exception(f"MarsPro switch control failed: {error_msg}")
+        return await self._make_request(endpoint, payload)
 
     async def _process_device_list(self, device_product_group):
         """Retrieve device list for a given product group - MarsPro version."""
@@ -192,107 +227,115 @@ class MarsProAPI:
             return []
 
     async def get_lightdata(self):
-        """Retrieve light data from the MarsPro API."""
-        # Group 1 = Lumières (basé sur la capture)
-        device_list = await self._process_device_list(1)
-        if device_list:
-            device_data = device_list[0]
-            self.device_id = device_data.get("id")
-            
-            # Mapping basé sur la vraie réponse capturée
-            return {
-                "deviceName": device_data.get("deviceName"),
-                "deviceLightRate": device_data.get("lastLightRate", device_data.get("lightRate", 0)),
-                "isClose": device_data.get("isClose", False),
-                "id": self.device_id,
-                "deviceImage": device_data.get("deviceImg"),
-                "productType": device_data.get("productType"),
-                "deviceSerialnum": device_data.get("deviceSerialnum"),
-                "connectStatus": device_data.get("connectStatus")
-            }
-        else:
-            _LOGGER.warning("No light devices found in MarsPro.")
+        """Get light data using confirmed MarsPro endpoints."""
+        await self._ensure_token()
+
+        # Utiliser l'endpoint de liste des dispositifs confirmé
+        payload = {
+            "pageNum": 1,
+            "pageSize": 50  # Récupérer tous les dispositifs
+        }
+        
+        endpoint = self.endpoints["device_list"]
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get('code') == '000':
+            devices = data.get('data', {}).get('list', [])
+            if devices:
+                # Prendre le premier dispositif comme dispositif principal
+                device = devices[0]
+                self.device_serial = device.get("deviceSerialnum")
+                _LOGGER.info(f"MarsPro device found: {device.get('deviceName')} (PID: {self.device_serial})")
+                return device
+        
+        _LOGGER.warning("No devices found in MarsPro, trying fallback...")
+        # Fallback vers l'API legacy si aucun dispositif trouvé
+        try:
+            await self._fallback_to_legacy_api()
+            return await self._fallback_get_lightdata()
+        except Exception as e:
+            _LOGGER.error(f"Both MarsPro and fallback failed: {e}")
             return None
 
     async def get_fandata(self):
-        """Retrieve fan data from the MarsPro API."""
-        # Group 2 = Ventilateurs (hypothèse)
-        device_list = await self._process_device_list(2)
-        if device_list:
-            device_data = device_list[0]
-            _LOGGER.debug("MarsPro fan data retrieved: %s", json.dumps(device_data, indent=2))
-            return {
-                "deviceName": device_data.get("deviceName"),
-                "deviceLightRate": device_data.get("lastLightRate", device_data.get("lightRate", 0)),
-                "humidity": device_data.get("humidity"),
-                "temperature": device_data.get("temperature"),
-                "speed": device_data.get("lastLightRate", device_data.get("lightRate", 0)),
-                "isClose": device_data.get("isClose", False),
-                "id": device_data.get("id"),
-                "deviceImage": device_data.get("deviceImg"),
-                "productType": device_data.get("productType")
-            }
-        else:
-            _LOGGER.warning("No fan devices found in MarsPro.")
-            return None
+        """Get fan data using confirmed MarsPro endpoints."""
+        # Pour l'instant, utilise les mêmes données que les lumières
+        # car les ventilateurs sont souvent intégrés aux dispositifs d'éclairage
+        return await self.get_lightdata()
 
     async def set_brightness(self, brightness):
-        """Set the brightness of the MarsPro light."""
+        """Set the brightness of the MarsPro light avec format outletCtrl simple des captures."""
         await self._ensure_token()
 
-        if not self.device_id:
+        # Si pas de device_serial, récupérer les données du dispositif
+        if not hasattr(self, 'device_serial') or not self.device_serial:
             device_data = await self.get_lightdata()
-            if device_data:
-                self.device_id = device_data.get("id")
+            if not device_data:
+                _LOGGER.error("Cannot set brightness: no device data available")
+                return
 
-        # Format exact capturé !
-        payload = {
-            "data": {
-                "method": "upDataStatus",
+        # Utiliser la nouvelle méthode de contrôle par PID
+        success = await self.control_device_by_pid(self.device_serial, True, brightness)
+        
+        if success:
+            _LOGGER.info(f"MarsPro brightness set to {brightness}% (PID: {self.device_serial})")
+            return {"code": "000", "msg": "success"}
+        else:
+            error_msg = f"Brightness control failed for PID: {self.device_serial}"
+            _LOGGER.error(error_msg)
+            raise Exception(error_msg)
+
+    async def _wakeup_bluetooth_device(self):
+        """Réveiller un appareil Bluetooth avant de l'utiliser"""
+        try:
+            inner_data = {
+                "method": "wakeup",
                 "params": {
-                    "rate": str(brightness),  # String comme dans la capture
-                    "deviceId": str(self.device_id)
+                    "deviceSerialnum": self.device_serial
                 }
             }
-        }
-
-        # ENDPOINT EXACT QUI MARCHE !
-        endpoint = "/api/upData/device"
-        
-        data = await self._make_request(endpoint, payload)
-        
-        if data and data.get("code") == "000":
-            _LOGGER.info(f"MarsPro brightness set to {brightness}% successfully")
-            return data
-        else:
-            error_msg = data.get('msg', 'Unknown error') if data else "No response"
-            _LOGGER.error(f"MarsPro brightness control failed: {error_msg}")
-            raise Exception(f"MarsPro brightness control failed: {error_msg}")
+            
+            payload = {"data": json.dumps(inner_data)}
+            endpoint = "/api/upData/device"
+            
+            _LOGGER.debug("Waking up Bluetooth device...")
+            data = await self._make_request(endpoint, payload)
+            
+            if data and data.get("code") == "000":
+                _LOGGER.info("Bluetooth device wakeup successful")
+                # Petit délai pour laisser l'appareil se réveiller
+                await asyncio.sleep(1)
+            else:
+                _LOGGER.warning(f"Bluetooth device wakeup failed: {data}")
+                
+        except Exception as e:
+            _LOGGER.warning(f"Bluetooth device wakeup error: {e}")
 
     async def set_fanspeed(self, speed, fan_device_id):
-        """Set the speed of the MarsPro fan."""
+        """Set the speed of the MarsPro fan avec format outletCtrl simple des captures."""
         await self._ensure_token()
 
-        # Même format que pour la luminosité
-        payload = {
-            "data": {
-                "method": "upDataStatus",
-                "params": {
-                    "rate": str(speed),  # Utiliser "rate" comme pour la luminosité
-                    "deviceId": str(fan_device_id)
-                }
+        # Format EXACT de la capture 3 : outletCtrl simple pour ventilateur
+        inner_data = {
+            "method": "outletCtrl",  # Format SIMPLE capturé !
+            "params": {
+                "pid": self.device_serial or fan_device_id,  # PID comme dans capture 3
+                "num": 0,                   # num: 0 comme dans capture 3  
+                "on": 1,                    # on: 1 pour allumer le ventilateur
+                "pwm": int(speed)           # pwm: vitesse comme luminosité
             }
         }
 
-        _LOGGER.debug(f"MarsPro fan speed payload: {json.dumps(payload, indent=2)}")
+        payload = {"data": json.dumps(inner_data)}
 
-        # ENDPOINT EXACT QUI MARCHE !
-        endpoint = "/api/upData/device"
+        _LOGGER.debug(f"MarsPro fan speed payload (outletCtrl format): {json.dumps(payload, indent=2)}")
+
+        endpoint = "/api/upData/device"  # Endpoint réel capturé
         
         data = await self._make_request(endpoint, payload)
         
         if data and data.get("code") == "000":
-            _LOGGER.info(f"MarsPro fan speed set to {speed}% successfully")
+            _LOGGER.info(f"MarsPro fan speed set to {speed}% successfully (outletCtrl format)")
             return data
         else:
             error_msg = data.get('msg', 'Unknown error') if data else "No response"
@@ -317,4 +360,76 @@ class MarsProAPI:
                 "language": "French",  # Changé pour correspondre à vos préférences
                 "appType": "marspro"  # Nouveau champ pour MarsPro
             }
-        ) 
+        )
+
+    async def get_all_devices(self):
+        """Récupérer tous les appareils disponibles avec leurs PIDs réels"""
+        await self._ensure_token()
+
+        payload = {
+            "pageNum": 1,
+            "pageSize": 50
+        }
+        
+        endpoint = self.endpoints["device_list"]
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get('code') == '000':
+            devices = data.get('data', {}).get('list', [])
+            _LOGGER.info(f"MarsPro found {len(devices)} total devices")
+            
+            # Log des informations détaillées sur chaque appareil
+            for i, device in enumerate(devices):
+                name = device.get("deviceName", "N/A")
+                pid = device.get("deviceSerialnum", "N/A")
+                status = "ON" if not device.get("isClose", False) else "OFF"
+                device_type = device.get("productType", "N/A")
+                _LOGGER.info(f"Device {i+1}: {name} (PID: {pid}) - {status} - Type: {device_type}")
+            
+            return devices
+        else:
+            _LOGGER.warning("No devices found in MarsPro")
+            return []
+
+    async def get_device_by_name(self, device_name: str):
+        """Récupérer un appareil spécifique par son nom"""
+        devices = await self.get_all_devices()
+        
+        for device in devices:
+            if device.get("deviceName", "").lower() == device_name.lower():
+                self.device_serial = device.get("deviceSerialnum")
+                _LOGGER.info(f"Found device '{device_name}' with PID: {self.device_serial}")
+                return device
+        
+        _LOGGER.warning(f"Device '{device_name}' not found")
+        return None
+
+    async def control_device_by_pid(self, pid: str, on: bool, pwm: int = 100):
+        """Contrôler un appareil spécifique par son PID"""
+        await self._ensure_token()
+        
+        # Format outletCtrl avec PID spécifique
+        inner_data = {
+            "method": "outletCtrl",
+            "params": {
+                "pid": pid,
+                "num": 0,
+                "on": 1 if on else 0,
+                "pwm": int(pwm)
+            }
+        }
+        
+        payload = {"data": json.dumps(inner_data)}
+        
+        _LOGGER.debug(f"Controlling device {pid}: on={on}, pwm={pwm}")
+        
+        endpoint = self.endpoints["device_control"]
+        data = await self._make_request(endpoint, payload)
+        
+        if data and data.get('code') == '000':
+            _LOGGER.info(f"Device {pid} control successful: on={on}, pwm={pwm}")
+            return True
+        else:
+            error_msg = data.get('msg', 'Unknown error') if data else "No response"
+            _LOGGER.error(f"Device {pid} control failed: {error_msg}")
+            return False 

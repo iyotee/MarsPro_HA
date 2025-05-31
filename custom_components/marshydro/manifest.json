@@ -1,12 +1,13 @@
 {
   "domain": "marshydro",
-  "name": "Mars Hydro/MarsPro Cloud Integration",
-  "codeowners": ["@suppqt", "@iyotee"],
+  "name": "Mars Hydro & MarsPro",
   "config_flow": true,
-  "dependencies": [],
   "documentation": "https://github.com/iyotee/MarsPro_HA",
-  "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/iyotee/MarsPro_HA/issues",
-  "requirements": ["aiohttp>=3.8.0"],
-  "version": "2.0.0"
+  "requirements": ["aiohttp"],
+  "ssdp": [],
+  "zeroconf": [],
+  "homekit": {},
+  "dependencies": [],
+  "codeowners": [],
+  "version": "2.2.0"
 }
