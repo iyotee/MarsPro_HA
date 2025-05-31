@@ -55,17 +55,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         stable_pid = device_data.get("device_pid_stable") or device_data.get("deviceSerialnum") or str(device_data.get("id"))
         device_name = device_data.get("deviceName", "Mars Device")
         
-        # Déterminer le type d'appareil basé sur le nom
+        # Déterminer le type d'appareil basé sur le nom et choisir les plateformes appropriées
         device_name_lower = device_name.lower()
         if "dimbox" in device_name_lower or "light" in device_name_lower:
             device_type = "Light"
-            _LOGGER.info(f"Device detected as LIGHT: {device_name}")
+            platforms_to_load = ["light", "sensor"]  # Seulement light + sensor pour les lampes
+            _LOGGER.info(f"Device detected as LIGHT: {device_name} - Loading light + sensor platforms only")
         elif "fan" in device_name_lower or "wind" in device_name_lower:
             device_type = "Fan" 
-            _LOGGER.info(f"Device detected as FAN: {device_name}")
+            platforms_to_load = ["fan", "sensor", "switch"]  # Fan + sensor + switch pour les ventilateurs
+            _LOGGER.info(f"Device detected as FAN: {device_name} - Loading fan + sensor + switch platforms")
         else:
-            device_type = "Light"  # Default to Light for DIMBOX devices
-            _LOGGER.info(f"Device defaulted to LIGHT: {device_name}")
+            device_type = "Light"  # Default to Light for unknown devices
+            platforms_to_load = ["light", "sensor"]  # Default: seulement light + sensor
+            _LOGGER.info(f"Device defaulted to LIGHT: {device_name} - Loading light + sensor platforms only")
         
         # Enregistrer UN SEUL appareil avec l'identifiant stable
         device_registry.async_get_or_create(
@@ -80,12 +83,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Stocker les informations pour les entités
         hass.data[DOMAIN][entry.entry_id]["device_type"] = device_type.lower()
         hass.data[DOMAIN][entry.entry_id]["stable_pid"] = stable_pid
+        hass.data[DOMAIN][entry.entry_id]["platforms_to_load"] = platforms_to_load
         
     else:
         _LOGGER.warning("No device found, registration skipped.")
+        platforms_to_load = ["light", "sensor"]  # Fallback par défaut
 
-    # Plattformen laden
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Charger SEULEMENT les plateformes appropriées pour ce type d'appareil
+    await hass.config_entries.async_forward_entry_setups(entry, platforms_to_load)
 
     return True
 
@@ -94,7 +99,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Entferne eine Konfigurationsinstanz."""
     _LOGGER.debug("Mars Hydro async_unload_entry wird aufgerufen")
 
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    # Utiliser les plateformes spécifiques qui ont été chargées pour cette entrée
+    platforms_to_unload = hass.data[DOMAIN][entry.entry_id].get("platforms_to_load", ["light", "sensor"])
+    
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms_to_unload)
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
