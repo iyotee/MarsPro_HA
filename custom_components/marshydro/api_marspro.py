@@ -926,40 +926,29 @@ class MarsProAPI:
             pass
 
     async def control_device_hybrid(self, on: bool, pwm: int = 100):
-        """Contrôle hybride ultra-robuste: toutes les méthodes possibles"""
-        _LOGGER.info(f"Starting hybrid control: on={on}, pwm={pwm}")
+        """Contrôle hybride optimisé: WiFi Cloud prioritaire, BLE en fallback"""
+        _LOGGER.info(f"Starting optimized hybrid control: on={on}, pwm={pwm}")
         
         # Étape 1: Détecter le mode si pas déjà fait
         if not hasattr(self, 'is_bluetooth_device'):
             _LOGGER.info("Detecting device mode...")
             await self.detect_device_mode()
         
-        # Étape 2: Essayer Bluetooth BLE si disponible
-        if self.is_bluetooth_device and self.bluetooth_support:
-            _LOGGER.info("Attempting Bluetooth BLE direct control...")
-            
-            ble_success = await self._ble_control_device(on, pwm)
-            if ble_success:
-                _LOGGER.info("Bluetooth BLE control successful!")
-                return True
-            else:
-                _LOGGER.warning("Bluetooth BLE control failed, trying cloud fallback...")
+        # PRIORITÉ 1: Contrôle Cloud WiFi (plus fiable et recommandé)
+        _LOGGER.info("Attempting Cloud API control (recommended approach)...")
         
-        # Étape 3: Fallback Cloud API avec activation préalable
-        _LOGGER.info("Attempting Cloud API control with activation...")
-        
-        # Sous-étape 3a: Activation setDeviceActiveV (crucial pour Bluetooth)
+        # Activation préalable (crucial pour tous les appareils)
         try:
             activation_success = await self._activate_device_for_cloud()
             if activation_success:
                 _LOGGER.info("Device activation successful")
-                await asyncio.sleep(2)  # Attendre que l'activation prenne effet
+                await asyncio.sleep(1)  # Attendre que l'activation prenne effet
             else:
                 _LOGGER.warning("Device activation failed, trying control anyway...")
         except Exception as e:
             _LOGGER.warning(f"Device activation error: {e}")
         
-        # Sous-étape 3b: Contrôle par PID
+        # Contrôle par PID via Cloud
         pid = self.device_serial
         if not pid:
             device_data = await self.get_lightdata()
@@ -971,10 +960,21 @@ class MarsProAPI:
                 _LOGGER.info("Cloud API control successful!")
                 return True
         
-        # Étape 4: Fallback méthodes legacy
-        _LOGGER.warning("All primary methods failed, trying legacy fallbacks...")
+        # PRIORITÉ 2: Bluetooth BLE direct (si appareil Bluetooth et bleak disponible)
+        if self.is_bluetooth_device and self.bluetooth_support:
+            _LOGGER.info("Cloud failed, attempting Bluetooth BLE direct control...")
+            
+            ble_success = await self._ble_control_device(on, pwm)
+            if ble_success:
+                _LOGGER.info("Bluetooth BLE control successful!")
+                return True
+            else:
+                _LOGGER.warning("Bluetooth BLE control failed...")
         
-        # Sous-étape 4a: Legacy set_brightness
+        # PRIORITÉ 3: Méthodes legacy en fallback
+        _LOGGER.warning("Primary methods failed, trying legacy fallbacks...")
+        
+        # Legacy set_brightness
         if on and pwm > 0:
             try:
                 legacy_response = await self.set_brightness(pwm)
@@ -984,7 +984,7 @@ class MarsProAPI:
             except Exception as e:
                 _LOGGER.debug(f"Legacy brightness failed: {e}")
         
-        # Sous-étape 4b: Legacy toggle_switch
+        # Legacy toggle_switch
         try:
             toggle_response = await self.toggle_switch(not on, pid or "")
             if toggle_response and toggle_response.get('code') == '000':
@@ -993,7 +993,7 @@ class MarsProAPI:
         except Exception as e:
             _LOGGER.debug(f"Legacy toggle failed: {e}")
         
-        # Étape 5: Dernière tentative avec formats alternatifs
+        # PRIORITÉ 4: Formats alternatifs en dernière chance
         _LOGGER.warning("All standard methods failed, trying alternative formats...")
         
         alternative_success = await self._try_alternative_control_formats(on, pwm, pid)
@@ -1001,7 +1001,8 @@ class MarsProAPI:
             _LOGGER.info("Alternative format control successful!")
             return True
         
-        _LOGGER.error("ALL CONTROL METHODS FAILED - device may be offline or incompatible")
+        _LOGGER.error("ALL CONTROL METHODS FAILED - device may be offline or needs WiFi configuration")
+        _LOGGER.info("RECOMMENDATION: Configure device to WiFi mode using configure_wifi_marspro.py")
         return False
 
     async def _activate_device_for_cloud(self):

@@ -10,65 +10,80 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/spec/v2.0.0.
 ### 🎯 **NOUVEAUTÉS MAJEURES**
 - **Support Bluetooth BLE direct ultra-robuste** pour appareils MarsPro Bluetooth
 - **Détection automatique multi-méthodes** du mode appareil (Bluetooth vs WiFi)
-- **Contrôle hybride intelligent** : BLE direct si Bluetooth, Cloud API si WiFi
+- **Contrôle hybride optimisé** : **WiFi Cloud prioritaire**, BLE en fallback
+- **Configuration WiFi automatique** : Script pour convertir Bluetooth → WiFi
 - **Fallback cascadé** : 4 niveaux de fallback pour assurer le fonctionnement
+
+### 🌟 **DÉCOUVERTE IMPORTANTE**
+**Une fois configuré en WiFi, l'appareil MarsPro abandonne le Bluetooth et utilise exclusivement le cloud !**
+- ✅ **Mode WiFi = Contrôle fiable et instantané**
+- ✅ **Script `configure_wifi_marspro.py`** pour conversion automatique
+- ✅ **Priorisation Cloud WiFi** dans l'intégration pour performance optimale
 
 ### 🔧 **AMÉLIORATIONS TECHNIQUES ULTRA-COMPLÈTES**
 - Ajout dépendance `bleak` pour communication Bluetooth Low Energy
 - **Nouvelles méthodes avancées** dans `api_marspro.py` :
-  - `_enhanced_ble_detection()` : Détection BLE multi-techniques
+  - `control_device_hybrid()` : **Contrôle WiFi-prioritaire** optimisé
+  - `_enhanced_ble_detection()` : Détection BLE multi-techniques (fallback)
   - `_extended_ble_scan()` : Scan étendu 20 secondes avec patterns flexibles
   - `_pattern_based_ble_scan()` : Recherche par patterns MarsPro connus
   - `_mac_based_ble_scan()` : Détection par fragments d'adresse MAC
-  - `control_device_hybrid()` : Contrôle ultra-robuste avec 5 niveaux de fallback
-  - `_activate_device_for_cloud()` : Activation préalable cruciale pour Bluetooth
+  - `_activate_device_for_cloud()` : Activation préalable cruciale
   - `_try_alternative_control_formats()` : Formats de contrôle alternatifs
 - **Protocoles BLE multiples** : 7 protocoles différents testés automatiquement
-- **Caractéristiques BLE complètes** : Test sur toutes les caractéristiques d'écriture
-- Version manifest : 2.3.0
+- **Script de configuration WiFi** : `configure_wifi_marspro.py`
+- Version manifest : 2.3.0-final
 
-### 🔵 **SUPPORT BLUETOOTH ULTRA-AVANCÉ**
+### 📶 **PRIORITÉ WIFI CLOUD (RECOMMANDÉ)**
+- **🥇 PRIORITÉ 1** : Cloud API avec activation `setDeviceActiveV`
+- **🥈 PRIORITÉ 2** : Bluetooth BLE direct (si échec WiFi)
+- **🥉 PRIORITÉ 3** : Méthodes legacy (`set_brightness`, `toggle_switch`)
+- **🏅 PRIORITÉ 4** : Formats alternatifs en dernière chance
+
+### 🔵 **SUPPORT BLUETOOTH ULTRA-AVANCÉ (FALLBACK)**
 - **4 techniques de scan BLE** :
   1. Scan standard (10s) - correspondance exacte
   2. Scan étendu (20s) - patterns flexibles  
   3. Scan par patterns (15s) - mots-clés MarsPro
   4. Scan MAC (15s) - fragments d'adresse
 - **7 protocoles BLE** testés automatiquement sur chaque appareil
-- **Connexion directe persistante** via Bluetooth (comme l'app MarsPro officielle)
-- **Communication locale ultra-rapide** sans besoin d'internet
+- **Connexion directe persistante** via Bluetooth (fallback si WiFi échoue)
+- **Communication locale** sans besoin d'internet
 - **Debug complet** avec logs détaillés de tous les appareils BLE
 
-### 📶 **COMPATIBILITÉ WIFI RENFORCÉE**
-- **Activation automatique systématique** avec `setDeviceActiveV` avant contrôle
-- **API cloud optimisée** pour appareils WiFi avec retry intelligent
-- **Formats alternatifs** : `upDataStatus`, `deviceControl`, `lightControl`
-- **Maintien total** de la compatibilité WiFi/Cloud existante
-
-### 🛠️ **FALLBACK CASCADÉ 5 NIVEAUX**
-1. **Bluetooth BLE direct** (si appareil Bluetooth et bleak disponible)
-2. **Cloud API avec activation** (méthode principale cloud)
-3. **Méthodes legacy** (`set_brightness`, `toggle_switch`)
-4. **Formats alternatifs** (3 formats de commande différents)
-5. **Détection d'erreur complète** avec diagnostic détaillé
+### 🛠️ **SCRIPT CONFIGURATION WIFI**
+- **`configure_wifi_marspro.py`** : Configuration automatique Bluetooth → WiFi
+- **Détection mode automatique** : WiFi déjà configuré ou Bluetooth
+- **Configuration guidée** : SSID + mot de passe WiFi
+- **Test automatique** : Vérification des commandes WiFi/Cloud
+- **Support 2.4GHz/5GHz** avec recommandations sécurité
 
 ### 💡 **UTILISATION SIMPLIFIÉE**
-- **Installation** : Copier `custom_components/marshydro` dans HA (inchangé)
-- **Configuration** : Email/mot de passe MarsPro (comme avant)
-- **Détection automatique** : L'intégration choisit la meilleure méthode
-- **Aucun changement** requis pour les utilisateurs existants
-- **Support automatique** des nouveaux appareils Bluetooth
+- **Étape 0 (Recommandée)** : Exécuter `configure_wifi_marspro.py` pour configurer WiFi
+- **Installation HA** : Copier `custom_components/marshydro` dans HA (inchangé)
+- **Configuration HA** : Email/mot de passe MarsPro (comme avant)
+- **Détection automatique** : L'intégration privilégie WiFi, fallback BLE
+- **Performance optimale** : WiFi = instantané, BLE = fallback local
 
 ### 🧪 **OUTILS DE TEST COMPLETS**
+- `configure_wifi_marspro.py` : **Configuration WiFi optimale** (RECOMMANDÉ)
 - `test_complete_final.py` : Test ultra-complet de toutes les méthodes
 - Scan BLE détaillé avec liste de tous les appareils
 - Diagnostic complet du mode d'appareil
 - Tests de tous les niveaux de fallback
 
 ### 🔧 **RÉSOLUTION PROBLÈMES**
-- ✅ **"Lampe ne réagit pas"** → Résolu pour appareils Bluetooth
-- ✅ **"Appareil non détecté en BLE"** → 4 méthodes de détection
-- ✅ **"Connexion intermittente"** → Fallback cascadé intelligent
-- ✅ **"Incompatibilité protocole"** → 7 protocoles BLE + 3 formats cloud
+- ✅ **"Lampe ne réagit pas"** → **Configurer en WiFi via script**
+- ✅ **"Contrôle intermittent"** → **WiFi prioritaire + fallback BLE**
+- ✅ **"Appareil non détecté BLE"** → **WiFi recommandé, 4 méthodes BLE fallback**
+- ✅ **"Incompatibilité protocole"** → **4 priorités: WiFi → BLE → Legacy → Alt**
+
+### 🎯 **RECOMMANDATION FINALE**
+**CONFIGUREZ VOTRE APPAREIL EN WIFI** avec `configure_wifi_marspro.py` pour :
+- 🚀 **Performance optimale** (contrôle instantané)
+- 🔄 **Fiabilité maximale** (cloud stable)
+- 🏠 **Intégration HA parfaite** (détection automatique WiFi)
+- 📱 **Compatibilité totale** (comme app MarsPro officielle)
 
 ---
 
