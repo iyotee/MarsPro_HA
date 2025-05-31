@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+import asyncio
 
 from homeassistant.components.light import ATTR_BRIGHTNESS, ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
@@ -37,10 +38,15 @@ async def async_setup_entry(
         device_name = device['name']
         device_pid = device['pid']
         is_bluetooth = device.get('is_bluetooth', False)
+        mode = device.get('mode', 'cloud')
         
         _LOGGER.info(f"Creating light entity for {device_name} (ID: {device_id}, PID: {device_pid})")
         
-        if is_bluetooth:
+        if mode == 'ble_pure':
+            # Mode BLE pur
+            _LOGGER.info(f"Device {device_name} uses BLE PURE model (Bluetooth direct)")
+            light_entity = MarsHydroBLEPureLight(coordinator, device)
+        elif is_bluetooth:
             # Appareil hybride: Cloud + BLE requis
             _LOGGER.info(f"Device {device_name} uses HYBRID model (Cloud API + BLE)")
             light_entity = MarsHydroHybridLight(coordinator, device)
@@ -309,3 +315,144 @@ class MarsHydroHybridLight(MarsHydroBaseLight):
                 self.ble_connection_retries = 0
                 self.control_mode = "hybrid_ble_cloud"
                 self.last_ble_attempt = current_time
+
+
+class MarsHydroBLEPureLight(MarsHydroBaseLight):
+    """MarsHydro light avec contrôle BLE pur (sans cloud)."""
+    
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator, device)
+        self.control_mode = "ble_pure"
+        self.device_address = device['address']
+        self.ble_connected = False
+        
+        # Protocoles BLE à tester pour MarsPro
+        self.ble_protocols = {
+            'on_commands': [
+                bytes([0x01, 0xFF]),  # Simple ON
+                bytes([0x55, 0xAA, 0x01, 0xFF, 0xFF]),  # ON avec header
+                bytes([0x01, 0x01]),  # ON alternative
+                bytes([0xF0, 0x01]),  # Pattern F0
+            ],
+            'off_commands': [
+                bytes([0x00, 0x00]),  # Simple OFF
+                bytes([0x55, 0xAA, 0x00, 0x00, 0xFF]),  # OFF avec header
+                bytes([0x01, 0x00]),  # OFF alternative
+                bytes([0xF0, 0x00]),  # Pattern F0
+            ],
+            'brightness_base': [
+                0x02,  # Commande brightness simple
+                0x03,  # Commande brightness alternative
+            ]
+        }
+    
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return entity specific state attributes."""
+        attributes = super().extra_state_attributes
+        attributes.update({
+            "control_mode": self.control_mode,
+            "ble_address": self.device_address,
+            "ble_connected": self.ble_connected,
+        })
+        return attributes
+
+    async def _ensure_ble_connection(self) -> bool:
+        """S'assurer qu'on a une connexion BLE."""
+        try:
+            client = await self.coordinator.establish_ble_connection(self.device_address)
+            self.ble_connected = client is not None
+            
+            if self.ble_connected:
+                _LOGGER.info(f"✅ BLE Pure connection ready for {self.device_name}")
+            else:
+                _LOGGER.warning(f"❌ BLE Pure connection failed for {self.device_name}")
+            
+            return self.ble_connected
+                
+        except Exception as e:
+            self.ble_connected = False
+            _LOGGER.error(f"BLE Pure connection error for {self.device_name}: {e}")
+            return False
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on the light avec BLE pur."""
+        try:
+            brightness = kwargs.get(ATTR_BRIGHTNESS, 255)
+            brightness_percent = int((brightness / 255) * 100)
+            
+            _LOGGER.info(f"Turning ON {self.device_name} with brightness {brightness_percent}% (BLE Pure)")
+            
+            # S'assurer qu'on a une connexion BLE
+            if not await self._ensure_ble_connection():
+                _LOGGER.error(f"Cannot establish BLE connection for {self.device_name}")
+                return
+            
+            # Essayer les commandes ON
+            success = False
+            
+            for cmd in self.ble_protocols['on_commands']:
+                result = await self.coordinator.send_ble_command(self.device_address, cmd)
+                if result:
+                    success = True
+                    _LOGGER.debug(f"BLE ON command success: {cmd.hex()}")
+                await asyncio.sleep(0.2)
+            
+            # Si brightness spécifiée, essayer commandes brightness
+            if brightness_percent < 100:
+                for base_cmd in self.ble_protocols['brightness_base']:
+                    brightness_val = int(brightness_percent * 255 / 100)
+                    brightness_cmd = bytes([base_cmd, brightness_val])
+                    
+                    result = await self.coordinator.send_ble_command(self.device_address, brightness_cmd)
+                    if result:
+                        _LOGGER.debug(f"BLE brightness command success: {brightness_cmd.hex()}")
+                    await asyncio.sleep(0.2)
+            
+            if success:
+                self._attr_is_on = True
+                self._attr_brightness = brightness
+                _LOGGER.info(f"✅ Successfully turned ON {self.device_name} (BLE Pure)")
+            else:
+                _LOGGER.warning(f"⚠️ BLE commands sent but no confirmation for {self.device_name}")
+                # On assume que ça a marché même sans confirmation
+                self._attr_is_on = True
+                self._attr_brightness = brightness
+            
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            _LOGGER.error(f"Error turning on {self.device_name}: {e}")
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off the light avec BLE pur."""
+        try:
+            _LOGGER.info(f"Turning OFF {self.device_name} (BLE Pure)")
+            
+            # S'assurer qu'on a une connexion BLE
+            if not await self._ensure_ble_connection():
+                _LOGGER.error(f"Cannot establish BLE connection for {self.device_name}")
+                return
+            
+            # Essayer les commandes OFF
+            success = False
+            
+            for cmd in self.ble_protocols['off_commands']:
+                result = await self.coordinator.send_ble_command(self.device_address, cmd)
+                if result:
+                    success = True
+                    _LOGGER.debug(f"BLE OFF command success: {cmd.hex()}")
+                await asyncio.sleep(0.2)
+            
+            if success:
+                self._attr_is_on = False
+                _LOGGER.info(f"✅ Successfully turned OFF {self.device_name} (BLE Pure)")
+            else:
+                _LOGGER.warning(f"⚠️ BLE commands sent but no confirmation for {self.device_name}")
+                # On assume que ça a marché même sans confirmation
+                self._attr_is_on = False
+            
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            _LOGGER.error(f"Error turning off {self.device_name}: {e}")

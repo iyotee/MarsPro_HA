@@ -2,20 +2,36 @@
   "config": {
     "step": {
       "user": {
+        "title": "Configuration MarsHydro",
+        "description": "Choisissez votre mode de configuration",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "mode": "Mode de contrôle"
         }
+      },
+      "cloud": {
+        "title": "Configuration Cloud MarsPro",
+        "description": "Connectez-vous à votre compte MarsPro pour le mode hybride (Cloud + BLE)",
+        "data": {
+          "email": "Email",
+          "password": "Mot de passe"
+        }
+      },
+      "ble_pure": {
+        "title": "Configuration BLE Pur",
+        "description": "Scanne automatiquement les appareils MarsPro en Bluetooth. {info}",
+        "data": {}
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "cannot_connect": "Échec de la connexion",
+      "invalid_auth": "Authentification invalide",
+      "unknown": "Erreur inattendue",
+      "no_ble_devices": "Aucun appareil MarsPro BLE trouvé. Assurez-vous que l'appareil est en mode pairing.",
+      "bleak_not_available": "La bibliothèque Bleak n'est pas disponible. Installez-la avec: pip install bleak",
+      "ble_scan_failed": "Échec du scan Bluetooth. Vérifiez que le Bluetooth est activé."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "Le service est déjà configuré"
     }
   }
 }

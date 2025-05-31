@@ -20,6 +20,217 @@ PLATFORMS: list[Platform] = [Platform.LIGHT]
 SCAN_INTERVAL = timedelta(seconds=30)
 
 
+class MarsHydroBLEPureCoordinator(DataUpdateCoordinator):
+    """Coordinateur BLE pur pour MarsHydro sans dépendance cloud."""
+
+    def __init__(self, hass: HomeAssistant, ble_devices: list) -> None:
+        """Initialize the BLE pure coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_ble_pure",
+            update_interval=SCAN_INTERVAL,
+        )
+        self.configured_ble_devices = ble_devices
+        self.devices = []
+        self.ble_connections = {}
+        self.ble_characteristics = {}  # Cache des caractéristiques BLE
+
+    async def _async_update_data(self):
+        """Fetch data from BLE devices directly."""
+        try:
+            _LOGGER.info("Updating BLE pure devices...")
+            
+            processed_devices = []
+            
+            for ble_config in self.configured_ble_devices:
+                device_name = ble_config['name']
+                device_address = ble_config['address']
+                device_pid = ble_config['pid']
+                
+                # Créer un ID unique basé sur l'adresse MAC
+                device_id = device_address.replace(":", "").lower()
+                
+                # Déterminer le type d'entité
+                entity_type = "light"  # Pour MarsPro, principalement des lumières
+                if any(keyword in device_name.lower() for keyword in ['fan', 'ventil']):
+                    entity_type = "fan"
+                
+                processed_device = {
+                    'id': device_id,
+                    'name': device_name,
+                    'pid': device_pid,
+                    'address': device_address,
+                    'entity_type': entity_type,
+                    'is_bluetooth': True,
+                    'mode': 'ble_pure',
+                    'rssi': ble_config.get('rssi', -50)
+                }
+                
+                processed_devices.append(processed_device)
+                
+                _LOGGER.info(
+                    f"BLE Pure device: {device_name} (Address: {device_address}, "
+                    f"PID: {device_pid}, Type: {entity_type})"
+                )
+            
+            self.devices = processed_devices
+            
+            return {
+                "devices": processed_devices,
+                "mode": "ble_pure"
+            }
+            
+        except Exception as err:
+            _LOGGER.error(f"Error updating BLE pure devices: {err}")
+            raise UpdateFailed(f"Error updating BLE pure devices: {err}")
+
+    def get_devices_by_type(self, entity_type: str):
+        """Récupérer les appareils par type d'entité."""
+        return [device for device in self.devices if device['entity_type'] == entity_type]
+
+    async def establish_ble_connection(self, device_address: str):
+        """Établir connexion BLE pour appareil pur."""
+        try:
+            # Si déjà connecté, retourner la connexion existante
+            if device_address in self.ble_connections:
+                client = self.ble_connections[device_address]
+                try:
+                    if await client.is_connected():
+                        _LOGGER.debug(f"Reusing existing BLE connection for {device_address}")
+                        return client
+                    else:
+                        # Nettoyer connexion morte
+                        del self.ble_connections[device_address]
+                except:
+                    del self.ble_connections[device_address]
+            
+            # Établir nouvelle connexion
+            _LOGGER.info(f"Establishing BLE connection to {device_address}")
+            
+            try:
+                from bleak import BleakClient
+                
+                client = BleakClient(device_address, timeout=30.0)
+                
+                # Tentative de connexion avec retry
+                for attempt in range(3):
+                    try:
+                        _LOGGER.info(f"BLE connection attempt {attempt + 1}/3 for {device_address}")
+                        await client.connect()
+                        
+                        if await client.is_connected():
+                            self.ble_connections[device_address] = client
+                            
+                            # Découvrir les services et caractéristiques
+                            await self._discover_ble_characteristics(client, device_address)
+                            
+                            _LOGGER.info(f"✅ BLE connection established for {device_address}")
+                            return client
+                        
+                    except Exception as connect_error:
+                        _LOGGER.warning(f"BLE connection attempt {attempt + 1} failed: {connect_error}")
+                        if attempt < 2:  # Retry
+                            await asyncio.sleep(2)
+                            continue
+                        else:
+                            raise connect_error
+                
+                _LOGGER.error(f"❌ All BLE connection attempts failed for {device_address}")
+                return None
+                
+            except ImportError:
+                _LOGGER.error("Bleak not available for BLE connection")
+                return None
+                
+        except Exception as e:
+            _LOGGER.error(f"BLE connection error for {device_address}: {e}")
+            return None
+
+    async def _discover_ble_characteristics(self, client, device_address: str):
+        """Découvrir les services et caractéristiques BLE."""
+        try:
+            services = await client.get_services()
+            
+            char_info = {
+                'writable_chars': [],
+                'readable_chars': [],
+                'notify_chars': []
+            }
+            
+            for service in services.services:
+                _LOGGER.debug(f"Service {service.uuid}: {service.description}")
+                
+                for char in service.characteristics:
+                    char_props = char.properties
+                    char_uuid = str(char.uuid)
+                    
+                    if "write" in char_props:
+                        char_info['writable_chars'].append(char_uuid)
+                        _LOGGER.debug(f"  Writable char: {char_uuid}")
+                    
+                    if "read" in char_props:
+                        char_info['readable_chars'].append(char_uuid)
+                        _LOGGER.debug(f"  Readable char: {char_uuid}")
+                    
+                    if "notify" in char_props:
+                        char_info['notify_chars'].append(char_uuid)
+                        _LOGGER.debug(f"  Notify char: {char_uuid}")
+            
+            self.ble_characteristics[device_address] = char_info
+            _LOGGER.info(f"Discovered {len(char_info['writable_chars'])} writable characteristics for {device_address}")
+            
+        except Exception as e:
+            _LOGGER.error(f"Error discovering BLE characteristics for {device_address}: {e}")
+
+    async def send_ble_command(self, device_address: str, command_data: bytes) -> bool:
+        """Envoyer commande BLE directe."""
+        try:
+            client = await self.establish_ble_connection(device_address)
+            if not client:
+                return False
+            
+            # Obtenir les caractéristiques d'écriture
+            char_info = self.ble_characteristics.get(device_address, {})
+            writable_chars = char_info.get('writable_chars', [])
+            
+            if not writable_chars:
+                _LOGGER.warning(f"No writable characteristics found for {device_address}")
+                return False
+            
+            # Essayer d'envoyer sur chaque caractéristique d'écriture
+            for char_uuid in writable_chars[:3]:  # Essayer les 3 premières
+                try:
+                    await client.write_gatt_char(char_uuid, command_data, response=False)
+                    _LOGGER.debug(f"BLE command sent to {device_address} on {char_uuid}: {command_data.hex()}")
+                    await asyncio.sleep(0.1)  # Petit délai entre les envois
+                except Exception as e:
+                    _LOGGER.debug(f"Failed to write to {char_uuid}: {e}")
+                    continue
+            
+            return True
+            
+        except Exception as e:
+            _LOGGER.error(f"Error sending BLE command to {device_address}: {e}")
+            return False
+
+    async def release_ble_connection(self, device_address: str):
+        """Libérer connexion BLE."""
+        try:
+            if device_address in self.ble_connections:
+                client = self.ble_connections[device_address]
+                try:
+                    if await client.is_connected():
+                        await client.disconnect()
+                except:
+                    pass
+                del self.ble_connections[device_address]
+                _LOGGER.info(f"BLE connection released for {device_address}")
+                
+        except Exception as e:
+            _LOGGER.error(f"Error releasing BLE connection for {device_address}: {e}")
+
+
 class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinateur de données pour MarsHydro avec support Bluetooth BLE.
     
@@ -414,31 +625,57 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up MarsHydro from a config entry."""
-    email = entry.data["email"]
-    password = entry.data["password"]
-
-    api = MarsProAPI(email, password)
+    mode = entry.data.get("mode", "cloud")
     
-    try:
-        login_success = await api.login()
-        if not login_success:
-            _LOGGER.error("Failed to login to MarsPro API")
+    if mode == "ble_pure":
+        # Mode BLE pur
+        ble_devices = entry.data.get("ble_devices", [])
+        
+        if not ble_devices:
+            _LOGGER.error("No BLE devices configured for BLE pure mode")
             return False
-    except Exception as err:
-        _LOGGER.error(f"Failed to connect to MarsPro API: {err}")
-        return False
+        
+        coordinator = MarsHydroBLEPureCoordinator(hass, ble_devices)
+        
+        # Fetch initial data
+        await coordinator.async_config_entry_first_refresh()
+        
+        hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN][entry.entry_id] = coordinator
+        
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        
+        _LOGGER.info(f"MarsHydro BLE Pure mode setup completed with {len(ble_devices)} devices")
+        return True
+        
+    else:
+        # Mode cloud/hybride original
+        email = entry.data["email"]
+        password = entry.data["password"]
 
-    coordinator = MarsHydroDataUpdateCoordinator(hass, api)
+        api = MarsProAPI(email, password)
+        
+        try:
+            login_success = await api.login()
+            if not login_success:
+                _LOGGER.error("Failed to login to MarsPro API")
+                return False
+        except Exception as err:
+            _LOGGER.error(f"Failed to connect to MarsPro API: {err}")
+            return False
 
-    # Fetch initial data so we have data when entities subscribe
-    await coordinator.async_config_entry_first_refresh()
+        coordinator = MarsHydroDataUpdateCoordinator(hass, api)
 
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+        # Fetch initial data so we have data when entities subscribe
+        await coordinator.async_config_entry_first_refresh()
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    return True
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        _LOGGER.info("MarsHydro Cloud/Hybrid mode setup completed")
+        return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -446,13 +683,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     
     # Libérer toutes les connexions BLE
-    for ble_address, client in coordinator.ble_connections.items():
-        try:
-            if await client.is_connected():
-                await client.disconnect()
-        except Exception as e:
-            _LOGGER.error(f"Error disconnecting BLE device {ble_address}: {e}")
-    
+    if hasattr(coordinator, 'ble_connections'):
+        for ble_address, client in coordinator.ble_connections.items():
+            try:
+                if await client.is_connected():
+                    await client.disconnect()
+            except Exception as e:
+                _LOGGER.error(f"Error disconnecting BLE device {ble_address}: {e}")
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
