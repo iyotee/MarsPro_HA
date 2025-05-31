@@ -3,11 +3,11 @@
   "name": "Mars Hydro & MarsPro",
   "config_flow": true,
   "documentation": "https://github.com/iyotee/MarsPro_HA",
-  "requirements": ["aiohttp"],
+  "requirements": ["aiohttp", "bleak"],
   "ssdp": [],
   "zeroconf": [],
   "homekit": {},
   "dependencies": [],
   "codeowners": [],
-  "version": "2.2.0"
+  "version": "2.3.0"
 }

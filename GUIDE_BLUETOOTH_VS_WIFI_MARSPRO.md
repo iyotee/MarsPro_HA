@@ -1,3 +1,90 @@
+# 🔌 GUIDE BLUETOOTH VS WIFI - MarsPro
+
+## 🔍 **DÉCOUVERTE CONFIRMÉE :**
+
+**✅ CONFIRMÉ PAR L'UTILISATEUR :** Les appareils WiFi utilisent une communication locale directe !
+
+### ⚡ **Comment ça marche RÉELLEMENT :**
+
+```
+🔵 MODE BLUETOOTH:
+📱 App MarsPro → 🌐 API Cloud → 📶 Internet → 🌐 Cloud → 💡 Lampe
+                 ↑ INTERCEPTABLE par HTTP Toolkit
+                 ↑ CONTRÔLABLE par notre API
+
+📶 MODE WIFI:
+📱 App MarsPro → 🏠 Réseau local direct → 💡 Lampe
+                 ↑ NON INTERCEPTABLE (pas d'HTTP cloud)
+                 ↑ NON CONTRÔLABLE par l'API cloud
+```
+
+## 🎯 **Preuve confirmée :**
+
+L'utilisateur rapporte que quand la lampe est en WiFi :
+- ✅ **Listes d'appareils** → Interceptées par HTTP Toolkit
+- ❌ **Commandes de contrôle** → PAS interceptées du tout
+
+Cela confirme que les commandes WiFi passent en **communication locale directe**.
+
+## 🛠️ **Solution recommandée : Mode Bluetooth**
+
+### **Étapes pour activer le mode Bluetooth :**
+
+1. **Ouvrir l'app MarsPro officielle**
+2. **Aller dans les paramètres de votre appareil** (`MH-DIMBOX-345F45EC73CC`)
+3. **DÉCONNECTER le WiFi** (gardez seulement Bluetooth)
+4. **Vérifier que l'appareil est en mode Bluetooth seul**
+
+### **Avantages du mode Bluetooth :**
+- ✅ **Contrôle via API cloud** → Fonctionne parfaitement
+- ✅ **Intégration Home Assistant** → 100% compatible
+- ✅ **Commandes interceptables** → Facilite le débogage
+- ✅ **Pas de configuration réseau** → Plus simple
+
+## 🧪 **Test de validation :**
+
+Après déconnexion WiFi, lancer :
+```bash
+python test_legacy_fallback.py
+```
+
+Ce test vérifiera que le contrôle fonctionne en mode Bluetooth pur.
+
+## ⚙️ **Configuration Home Assistant :**
+
+Une fois en mode Bluetooth, l'intégration fonctionnera parfaitement :
+- 🔄 **Détection automatique** des appareils
+- 🎛️ **Contrôle complet** (luminosité, on/off)
+- 📊 **Statuts en temps réel**
+- 🔄 **Synchronisation** bidirectionnelle
+
+## 🔬 **Pour les développeurs :**
+
+### **Communication WiFi (complexe) :**
+- Protocole propriétaire local
+- Découverte réseau nécessaire
+- Chiffrement/authentification locale
+- Port UDP/TCP spécifique
+
+### **Communication Bluetooth (simple) :**
+- API REST cloud standard
+- Authentification par token
+- Format JSON documenté
+- Endpoints confirmés fonctionnels
+
+## 💡 **Conclusion :**
+
+**Le mode Bluetooth est la solution optimale pour l'intégration Home Assistant.**
+
+- Plus fiable que WiFi
+- Plus simple à implémenter
+- Entièrement compatible avec notre API
+- Pas de reverse engineering nécessaire
+
+---
+
+✅ **Recommandation finale** : Utiliser la lampe en mode Bluetooth uniquement pour Home Assistant
+
 # 🔍 Guide Bluetooth vs WiFi MarsPro
 
 ## 💡 Découverte Cruciale

@@ -94,29 +94,50 @@ class MarsHydroBrightnessLight(LightEntity):
         self._state = False
 
     async def async_set_brightness(self, brightness: int):
-        """Set the brightness of the light."""
+        """Set the brightness of the light using hybrid control (BLE/Cloud)."""
         try:
             brightness_percentage = round((brightness / 255) * 100)
-            response = await self._api.safe_api_call(
-                self._api.set_brightness, brightness_percentage
+            is_on = brightness > 0
+            
+            _LOGGER.info(f"Setting brightness to {brightness_percentage}% (on={is_on})")
+            
+            # Utiliser la méthode hybride qui détecte automatiquement Bluetooth vs WiFi
+            success = await self._api.safe_api_call(
+                self._api.control_device_hybrid, is_on, brightness_percentage
             )
-            if response.get("code") == "102":
-                _LOGGER.warning("Token expired, re-authenticating...")
-                await self._api.login()
+            
+            if success:
+                self._brightness = brightness
+                self._state = is_on
+                self._available = True
+                _LOGGER.info(f"Hybrid control successful: {brightness_percentage}% (Bluetooth/WiFi)")
+            else:
+                # Fallback vers l'ancienne méthode set_brightness
+                _LOGGER.warning("Hybrid control failed, trying legacy method...")
                 response = await self._api.safe_api_call(
                     self._api.set_brightness, brightness_percentage
                 )
+                
+                if response and response.get("code") == "102":
+                    _LOGGER.warning("Token expired, re-authenticating...")
+                    await self._api.login()
+                    response = await self._api.safe_api_call(
+                        self._api.set_brightness, brightness_percentage
+                    )
 
-            if response.get("code") != "000":
-                raise Exception(f"API Error: {response.get('msg')}")
-
-            self._brightness = brightness
-            self._state = brightness > 0
-            self._available = True
-            _LOGGER.info(f"Brightness set to {brightness_percentage}%")
+                if response and response.get("code") == "000":
+                    self._brightness = brightness
+                    self._state = is_on
+                    self._available = True
+                    _LOGGER.info(f"Legacy control successful: {brightness_percentage}%")
+                else:
+                    error_msg = response.get('msg') if response else 'No response'
+                    raise Exception(f"All control methods failed: {error_msg}")
+                    
         except Exception as e:
             self._available = False
             _LOGGER.error(f"Error setting brightness: {e}")
+            # Ne pas lever l'exception pour éviter de casser l'entité
 
     async def async_update(self):
         """Update the light's state."""

@@ -175,5 +175,159 @@ async def main():
         import traceback
         traceback.print_exc()
 
+async def test_bluetooth_mode():
+    """Test du contrôle en mode Bluetooth pur"""
+    print("🔵 TEST MODE BLUETOOTH FORCÉ")
+    print("=" * 50)
+    print("🎯 Test après déconnexion WiFi de la lampe")
+    print()
+    
+    print("📋 INSTRUCTIONS PRÉALABLES:")
+    print("1. 📱 Ouvrez l'app MarsPro")
+    print("2. ⚙️  Allez dans les paramètres de votre lampe")
+    print("3. 📶 DÉCONNECTEZ le WiFi (gardez seulement Bluetooth)")
+    print("4. ✅ Confirmez que la lampe est en mode Bluetooth seul")
+    print()
+    
+    response = input("🔍 Avez-vous déconnecté le WiFi de la lampe ? (oui/non): ").lower().strip()
+    
+    if response != 'oui':
+        print("⚠️  Déconnectez d'abord le WiFi puis relancez ce test")
+        return False
+    
+    print()
+    print("🚀 Démarrage test mode Bluetooth...")
+    
+    email = "jeremy.noverraz2@proton.me"
+    password = "T00rT00r"
+    
+    try:
+        # Connexion API
+        print("🔧 Connexion à l'API MarsPro...")
+        api = MarsProAPI(email, password)
+        await api.login()
+        print("✅ Connecté à l'API MarsPro")
+        
+        # Vérification que l'appareil est maintenant en mode Bluetooth
+        print("\n📱 Vérification du mode de connexion...")
+        devices = await api.get_all_devices()
+        
+        if not devices:
+            print("❌ Aucun appareil trouvé")
+            return False
+        
+        device = devices[0]
+        device_name = device.get("deviceName")
+        is_net_device = device.get("isNetDevice", False)
+        is_online = device.get("isOnline", False)
+        connection_type = device.get("connection_type", "Unknown")
+        
+        print(f"📱 Appareil: {device_name}")
+        print(f"🔗 Type connexion: {connection_type}")
+        print(f"📶 Appareil réseau: {is_net_device}")
+        print(f"🌐 En ligne: {is_online}")
+        
+        if is_net_device:
+            print("⚠️  L'appareil est encore détecté comme WiFi")
+            print("💡 Attendez quelques minutes ou redémarrez la lampe")
+            
+            # Test quand même
+            print("🧪 Test de contrôle malgré la détection WiFi...")
+        else:
+            print("✅ L'appareil est maintenant en mode Bluetooth !")
+        
+        print()
+        
+        # Tests de contrôle Bluetooth
+        stable_pid = device.get("device_pid_stable") or "345F45EC73CC"
+        
+        test_sequences = [
+            (True, 30, "🔆 Test 1: Allumer à 30%"),
+            (True, 70, "🔆 Test 2: Augmenter à 70%"),
+            (True, 100, "🔆 Test 3: Maximum 100%"),
+            (False, 0, "🌙 Test 4: Éteindre"),
+            (True, 50, "🔆 Test 5: Rallumer à 50%")
+        ]
+        
+        print("🎛️  TESTS CONTRÔLE MODE BLUETOOTH:")
+        print("-" * 40)
+        
+        all_success = True
+        
+        for on, pwm, description in test_sequences:
+            print(f"\n{description}")
+            print(f"   Commande: on={on}, pwm={pwm}")
+            
+            success = await api.control_device_by_pid(stable_pid, on, pwm)
+            
+            if success:
+                print(f"   ✅ API: Commande envoyée avec succès")
+                print(f"   👀 REGARDEZ VOTRE LAMPE MAINTENANT !")
+                
+                # Demander confirmation visuelle
+                await asyncio.sleep(3)
+                visual_confirm = input(f"   📋 La lampe a-t-elle réagi ? (oui/non): ").lower().strip()
+                
+                if visual_confirm == 'oui':
+                    print(f"   🎉 SUCCÈS COMPLET ! Contrôle Bluetooth fonctionne !")
+                else:
+                    print(f"   ❌ Pas de réaction physique")
+                    all_success = False
+            else:
+                print(f"   ❌ API: Commande échouée")
+                all_success = False
+            
+            print(f"   ⏳ Pause 2 secondes...")
+            await asyncio.sleep(2)
+        
+        print(f"\n" + "=" * 50)
+        print("🏁 TEST MODE BLUETOOTH TERMINÉ")
+        print()
+        
+        if all_success:
+            print("🎊 SUCCÈS TOTAL !")
+            print("✅ Le contrôle fonctionne parfaitement en mode Bluetooth")
+            print("💡 Solution: Utiliser la lampe en mode Bluetooth uniquement")
+            print()
+            print("📋 RECOMMANDATIONS:")
+            print("   1. Gardez la lampe en mode Bluetooth seul")
+            print("   2. L'intégration Home Assistant fonctionnera parfaitement")
+            print("   3. Pas besoin de WiFi pour le contrôle")
+        else:
+            print("⚠️  PROBLÈME PERSISTANT")
+            print("❌ Le contrôle ne fonctionne pas même en mode Bluetooth")
+            print("💡 Il pourrait y avoir un autre problème")
+        
+        return all_success
+        
+    except Exception as e:
+        print(f"❌ Erreur dans le test: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+async def explain_wifi_vs_bluetooth():
+    """Expliquer la différence WiFi vs Bluetooth"""
+    print("\n" + "=" * 60)
+    print("💡 EXPLICATION: POURQUOI LE WIFI NE MARCHE PAS")
+    print("=" * 60)
+    print()
+    print("🔍 DÉCOUVERTE IMPORTANTE:")
+    print("   Quand la lampe est en WiFi, l'app MarsPro communique")
+    print("   DIRECTEMENT avec la lampe en local (pas via le cloud)")
+    print()
+    print("📡 COMMUNICATION MODES:")
+    print("   🔵 Bluetooth: App → Cloud API → Internet → Cloud → Lampe")
+    print("                 ↑ INTERCEPTABLE et CONTRÔLABLE")
+    print()
+    print("   📶 WiFi:      App → Réseau local direct → Lampe")
+    print("                 ↑ NON INTERCEPTABLE et NON CONTRÔLABLE via cloud")
+    print()
+    print("✅ SOLUTION:")
+    print("   Utiliser la lampe en mode Bluetooth uniquement")
+    print("   L'intégration Home Assistant fonctionnera parfaitement !")
+
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
+    asyncio.run(test_bluetooth_mode())
+    asyncio.run(explain_wifi_vs_bluetooth()) 

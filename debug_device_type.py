@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-🔍 DEBUG AVANCÉ - État appareil et test app officielle
+🔍 DIAGNOSTIC TYPE DE CONNEXION APPAREIL
+Analyse pourquoi l'appareil n'est pas détecté comme WiFi
 """
 
 import asyncio
@@ -12,162 +13,184 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'custom_components', 
 
 from api_marspro import MarsProAPI
 
-async def debug_device_state():
-    """Analyser l'état complet de l'appareil"""
-    print("🔍 DEBUG ÉTAT APPAREIL")
-    print("=" * 50)
+async def analyze_connection_type():
+    """Analyser le type de connexion de l'appareil"""
+    print("🔍 DIAGNOSTIC TYPE DE CONNEXION APPAREIL")
+    print("=" * 60)
+    print("📶 Analyse après connexion WiFi")
+    print()
     
     email = "jeremy.noverraz2@proton.me"
     password = "T00rT00r"
     
     try:
+        # Connexion API
+        print("🔧 Connexion à l'API MarsPro...")
         api = MarsProAPI(email, password)
         await api.login()
-        print("✅ Connexion réussie")
+        print("✅ Connecté à l'API MarsPro")
+        print()
         
-        # 1. Informations appareil via get_lightdata
-        print("\n📱 ÉTAT APPAREIL (get_lightdata):")
-        print("-" * 40)
-        light_data = await api.get_lightdata()
+        # TEST 1: Recherche exhaustive dans TOUS les groupes
+        print("📊 TEST 1: RECHERCHE EXHAUSTIVE GROUPES D'APPAREILS")
+        print("-" * 50)
         
-        for key, value in light_data.items():
-            if key == 'deviceLightRate' and value == -1:
-                print(f"⚠️  {key}: {value} ← PROBLÈME ! Pas d'état luminosité")
-            elif key in ['isStart', 'isClose', 'connectStatus']:
-                print(f"🔍 {key}: {value}")
-            else:
-                print(f"📋 {key}: {value}")
+        all_devices_found = []
         
-        device_id = light_data['id']
-        device_serial = light_data['deviceSerialnum']
+        # Tester TOUS les groupes possibles
+        groups_to_test = [None, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         
-        # 2. Détails via getDeviceDetail
-        print(f"\n🔎 DÉTAILS COMPLETS (getDeviceDetail):")
-        print("-" * 40)
-        
-        payload = {"deviceId": device_id}
-        detail_data = await api._make_request("/api/android/udm/getDeviceDetail/v1", payload)
-        
-        if detail_data and detail_data.get("code") == "000":
-            device_detail = detail_data.get("data", {})
+        for group_id in groups_to_test:
+            print(f"\n🔍 Test groupe {group_id}...")
             
-            # Vérifier tous les champs critiques
-            critical_fields = [
-                'isStart', 'isClose', 'connectStatus', 'deviceLightRate',
-                'isBluetoothDevice', 'isWifiDevice', 'isNetDevice',
-                'deviceStatus', 'deviceSwitch'
-            ]
+            payload = {
+                "currentPage": 1,
+                "type": None,
+                "deviceProductGroup": group_id
+            }
             
-            print("🚨 CHAMPS CRITIQUES:")
-            for field in critical_fields:
-                value = device_detail.get(field, 'MANQUANT')
-                if field == 'deviceLightRate' and value == -1:
-                    print(f"❌ {field}: {value} ← PROBLÈME MAJEUR !")
-                elif field == 'isStart' and value != 1:
-                    print(f"⚠️  {field}: {value} ← Appareil pas démarré")
-                elif field == 'connectStatus' and value != 1:
-                    print(f"⚠️  {field}: {value} ← Problème connexion")
+            endpoint = api.endpoints["device_list"]
+            data = await api._make_request(endpoint, payload)
+            
+            if data and data.get('code') == '000':
+                devices = data.get('data', {}).get('list', [])
+                
+                if devices:
+                    print(f"   ✅ {len(devices)} appareil(s) dans groupe {group_id}")
+                    
+                    for device in devices:
+                        device_name = device.get("deviceName", "N/A")
+                        device_id = device.get("id", "N/A")
+                        is_online = device.get("isOnline", False)
+                        is_net_device = device.get("isNetDevice", False)
+                        
+                        print(f"      📱 {device_name} (ID: {device_id})")
+                        print(f"         Online: {is_online}")
+                        print(f"         Net Device: {is_net_device}")
+                        
+                        device["found_in_group"] = group_id
+                        all_devices_found.append(device)
                 else:
-                    print(f"✅ {field}: {value}")
+                    print(f"   → Aucun appareil dans groupe {group_id}")
+            else:
+                print(f"   → Erreur groupe {group_id}: {data}")
         
-        # 3. Test si l'app MarsPro officielle fonctionne
-        print(f"\n❓ QUESTIONS CRUCIALES :")
-        print("=" * 50)
+        # Recherche de VOTRE appareil spécifique
+        print(f"\n🎯 ANALYSE DE VOTRE APPAREIL: MH-DIMBOX-345F45EC73CC")
+        print("-" * 50)
         
-        print("🔥 1. L'APP MARSPRO OFFICIELLE sur votre téléphone arrive-t-elle à contrôler la lampe ?")
-        app_works = input("   Tapez 'oui' si l'app MarsPro contrôle la lampe, 'non' sinon: ").lower().strip()
+        your_device = None
+        for device in all_devices_found:
+            if "345F45EC73CC" in device.get("deviceName", ""):
+                your_device = device
+                break
         
-        print("🔌 2. Le bouton physique sur la lampe fonctionne-t-il ?")
-        button_works = input("   Tapez 'oui' si le bouton marche, 'non' sinon: ").lower().strip()
-        
-        print("💡 3. La lampe s'allume-t-elle quand vous la branchez ?")
-        power_works = input("   Tapez 'oui' si elle s'allume au branchement, 'non' sinon: ").lower().strip()
-        
-        # 4. Diagnostic basé sur les réponses
-        print(f"\n🔧 DIAGNOSTIC :")
-        print("-" * 30)
-        
-        if app_works == 'non' and button_works == 'non':
-            print("💀 PROBLÈME HARDWARE ! La lampe est défectueuse")
-            print("🔧 Action: Contacter le support Mars Hydro")
+        if your_device:
+            print(f"✅ Votre appareil trouvé !")
+            print(f"📱 Nom: {your_device.get('deviceName')}")
+            print(f"🆔 ID: {your_device.get('id')}")
+            print(f"📍 Trouvé dans groupe: {your_device.get('found_in_group')}")
+            print()
             
-        elif app_works == 'non' and button_works == 'oui':
-            print("📡 PROBLÈME CONNECTIVITÉ ! La lampe n'est pas vraiment connectée")
-            print("🔧 Action: Reset WiFi + reconfiguration complète")
+            print(f"📋 TOUS LES CHAMPS DE VOTRE APPAREIL:")
+            for key, value in sorted(your_device.items()):
+                print(f"   {key}: {value}")
             
-        elif app_works == 'oui' and button_works == 'oui':
-            print("🎯 PROBLÈME NOTRE API ! L'appareil fonctionne mais pas avec notre code")
-            print("🔧 Action: Capturer EXACTEMENT les commandes de l'app qui marche")
+            print(f"\n🔍 ANALYSE STATUT DE CONNEXION:")
+            is_online = your_device.get("isOnline", False)
+            is_net_device = your_device.get("isNetDevice", False)
+            device_mode = your_device.get("deviceMode", "N/A")
             
-            # Si l'app officielle marche, capturer ses commandes
-            print(f"\n🚨 CAPTURES REQUISES !")
-            print("📱 1. Ouvrez HTTP Toolkit")
-            print("📱 2. Ouvrez l'app MarsPro")
-            print("💡 3. Changez la luminosité dans l'app")
-            print("🔍 4. Capturez les requêtes POST vers /api/upData/device")
-            print("📋 5. Partagez-moi le payload EXACT qui marche !")
+            print(f"   En ligne: {is_online}")
+            print(f"   Appareil réseau: {is_net_device}")
+            print(f"   Mode appareil: {device_mode}")
             
+            # Diagnostic du statut
+            if is_online and is_net_device:
+                print(f"   ✅ STATUT: Appareil WiFi en ligne")
+                print(f"   💡 L'appareil est bien connecté au WiFi !")
+            elif is_online and not is_net_device:
+                print(f"   🔵 STATUT: Appareil Bluetooth en ligne")
+                print(f"   ⚠️  L'appareil est en ligne mais pas détecté comme WiFi")
+            elif not is_online and is_net_device:
+                print(f"   📶 STATUT: Appareil WiFi hors ligne")
+                print(f"   ⚠️  Configuré pour WiFi mais pas connecté")
+            else:
+                print(f"   ❌ STATUT: Appareil Bluetooth hors ligne")
+                print(f"   💡 La connexion WiFi n'a peut-être pas abouti")
         else:
-            print("🤔 SITUATION MIXTE - Analyse plus poussée nécessaire")
+            print(f"❌ Votre appareil non trouvé dans aucun groupe !")
         
-        # 5. Test de commandes alternatives
-        if app_works == 'oui':
-            print(f"\n🧪 PUISQUE L'APP MARCHE, TESTONS D'AUTRES FORMATS :")
-            print("-" * 50)
-            
-            # Format très simple
-            simple_payload = {
-                "data": json.dumps({
-                    "deviceId": device_id,
-                    "brightness": 80
-                })
-            }
-            
-            print(f"📝 Test format ultra-simple:")
-            print(f"   {json.dumps(simple_payload, indent=2)}")
-            result = await api._make_request("/api/upData/device", simple_payload)
-            print(f"📤 Réponse: {result}")
-            
-            await asyncio.sleep(3)
-            
-            # Format avec serial seulement
-            serial_payload = {
-                "deviceSerialnum": device_serial,
-                "pwm": 90
-            }
-            
-            print(f"📝 Test avec serial direct:")
-            print(f"   {json.dumps(serial_payload, indent=2)}")
-            result2 = await api._make_request("/api/upData/device", serial_payload)
-            print(f"📤 Réponse: {result2}")
+        # TEST 2: Délai et nouvelle vérification
+        print(f"\n⏰ TEST 2: VÉRIFICATION APRÈS DÉLAI")
+        print("-" * 50)
+        print(f"⏳ Attente 15 secondes pour synchronisation...")
+        await asyncio.sleep(15)
         
-        return device_detail.get('deviceLightRate', -1) != -1
+        print(f"🔄 Nouvelle recherche...")
+        updated_devices = await api.get_all_devices()
+        
+        if updated_devices:
+            for device in updated_devices:
+                if "345F45EC73CC" in device.get("deviceName", ""):
+                    print(f"📊 STATUT ACTUALISÉ:")
+                    print(f"   En ligne: {device.get('isOnline')}")
+                    print(f"   Appareil réseau: {device.get('isNetDevice')}")
+                    print(f"   Type connexion détecté: {device.get('connection_type')}")
+                    
+                    if device.get('isNetDevice') or device.get('isOnline'):
+                        print(f"   ✅ Amélioration détectée !")
+                    else:
+                        print(f"   ⚠️  Pas de changement")
+        
+        # TEST 3: Test de connectivité directe
+        print(f"\n🌐 TEST 3: TEST COMMANDE AVEC STATUT ACTUEL")
+        print("-" * 50)
+        
+        if your_device:
+            device_id = your_device.get("id")
+            stable_pid = "345F45EC73CC"
+            
+            print(f"🎯 Test de commande de contrôle...")
+            print(f"   Device ID: {device_id}")
+            print(f"   PID: {stable_pid}")
+            
+            # Test commande simple
+            success = await api.control_device_by_pid(stable_pid, True, 50)
+            
+            if success:
+                print(f"   ✅ Commande envoyée avec succès !")
+                print(f"   💡 Regardez votre lampe - elle devrait réagir !")
+            else:
+                print(f"   ❌ Commande échouée")
+                print(f"   💡 Cela confirme le problème de connectivité")
+        
+        # Recommandations
+        print(f"\n💡 RECOMMANDATIONS BASÉES SUR L'ANALYSE:")
+        print("-" * 50)
+        
+        if your_device:
+            is_online = your_device.get("isOnline", False)
+            is_net_device = your_device.get("isNetDevice", False)
+            
+            if not is_online and not is_net_device:
+                print(f"🔧 PROBLÈME: Connexion WiFi non établie")
+                print(f"   1. Vérifiez dans l'app MarsPro que le WiFi est bien configuré")
+                print(f"   2. Redémarrez la lampe (débranchez/rebranchez)")
+                print(f"   3. Refaites la configuration WiFi dans l'app")
+            elif is_online and not is_net_device:
+                print(f"🤔 PROBLÈME: API détecte Bluetooth malgré WiFi")
+                print(f"   1. L'appareil est peut-être en mode hybride")
+                print(f"   2. L'API peut utiliser la connexion Bluetooth par défaut")
+                print(f"   3. C'est peut-être normal - testons le contrôle")
+        
+        return your_device is not None
         
     except Exception as e:
-        print(f"❌ Erreur: {e}")
+        print(f"❌ Erreur dans l'analyse: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
-async def main():
-    print("🚨 DEBUG COMPLET - RÉSOLVONS CE MYSTÈRE !")
-    print("🎯 Objectif: Comprendre pourquoi la lampe ne bouge pas")
-    print()
-    
-    device_ok = await debug_device_state()
-    
-    print(f"\n🎯 CONCLUSION:")
-    print("=" * 40)
-    
-    if device_ok:
-        print("✅ L'appareil semble OK techniquement")
-        print("🔧 Le problème est dans notre format de commandes")
-    else:
-        print("❌ L'appareil a un problème (deviceLightRate = -1)")
-        print("🔧 Problème hardware ou connectivité")
-    
-    print(f"\n📋 ACTIONS REQUISES:")
-    print("1. 🧪 Testez l'app MarsPro officielle")
-    print("2. 🔍 Si elle marche, capturez ses vraies requêtes")
-    print("3. 🔧 Si elle marche pas, reset complet de la lampe")
-
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(analyze_connection_type()) 

@@ -6,6 +6,13 @@ import asyncio
 import random
 import re
 
+# Support Bluetooth BLE pour appareils MarsPro Bluetooth
+try:
+    from bleak import BleakScanner, BleakClient
+    BLUETOOTH_SUPPORT = True
+except ImportError:
+    BLUETOOTH_SUPPORT = False
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -16,6 +23,13 @@ class MarsProAPI:
         self.token = None
         self.user_id = None
         self.base_url = "https://mars-pro.api.lgledsolutions.com"  # URL CORRECTE !
+        
+        # Bluetooth BLE support
+        self.bluetooth_support = BLUETOOTH_SUPPORT
+        self.ble_device = None
+        self.ble_client = None
+        self.is_bluetooth_device = False
+        self.device_serial = None
         
         # Endpoints découverts et confirmés fonctionnels
         self.endpoints = {
@@ -463,10 +477,20 @@ class MarsProAPI:
         return None
 
     async def control_device_by_pid(self, pid: str, on: bool, pwm: int = 100):
-        """Contrôler un appareil spécifique par son PID"""
+        """Contrôler un appareil spécifique par son PID avec gestion Bluetooth"""
         await self._ensure_token()
         
-        # D'abord essayer le contrôle avec PID (pour appareils Bluetooth)
+        # Pour les appareils Bluetooth, TOUJOURS réveiller avant la commande
+        _LOGGER.info(f"Starting control for device {pid} (Bluetooth device)")
+        
+        # 1. RÉVEIL BLUETOOTH OBLIGATOIRE
+        try:
+            await self._wakeup_bluetooth_device_by_pid(pid)
+            await asyncio.sleep(1)  # Attendre que l'appareil se réveille
+        except Exception as e:
+            _LOGGER.warning(f"Bluetooth wakeup failed for {pid}: {e}")
+        
+        # 2. COMMANDE DE CONTRÔLE
         if pid and len(str(pid)) > 5:  # Si on a un vrai PID
             # Format outletCtrl avec PID spécifique
             inner_data = {
@@ -481,40 +505,283 @@ class MarsProAPI:
             
             payload = {"data": json.dumps(inner_data)}
             
-            _LOGGER.debug(f"Controlling device {pid}: on={on}, pwm={pwm}")
+            _LOGGER.info(f"Controlling Bluetooth device {pid}: on={on}, pwm={pwm}")
             
             endpoint = self.endpoints["device_control"]
             data = await self._make_request(endpoint, payload)
             
             if data and data.get('code') == '000':
-                _LOGGER.info(f"Device {pid} control successful: on={on}, pwm={pwm}")
+                _LOGGER.info(f"Bluetooth device {pid} control successful: on={on}, pwm={pwm}")
+                
+                # 3. VÉRIFICATION POST-COMMANDE (pour Bluetooth)
+                await asyncio.sleep(0.5)
+                verification_success = await self._verify_bluetooth_command(pid)
+                
+                if verification_success:
+                    _LOGGER.info(f"Bluetooth command verified successfully for {pid}")
+                    return True
+                else:
+                    _LOGGER.warning(f"Bluetooth command not verified for {pid}, retrying...")
+                    
+                    # Retry une fois
+                    await asyncio.sleep(1)
+                    await self._wakeup_bluetooth_device_by_pid(pid)
+                    await asyncio.sleep(1)
+                    
+                    retry_data = await self._make_request(endpoint, payload)
+                    if retry_data and retry_data.get('code') == '000':
+                        _LOGGER.info(f"Bluetooth device {pid} control successful on retry")
+                        return True
+                    else:
+                        _LOGGER.error(f"Bluetooth device {pid} control failed on retry")
+                        return False
+            else:
+                _LOGGER.error(f"Bluetooth device {pid} control failed: {data}")
+                return False
+        
+        _LOGGER.error(f"Invalid PID for Bluetooth control: {pid}")
+        return False
+
+    async def _wakeup_bluetooth_device_by_pid(self, pid: str):
+        """Réveiller un appareil Bluetooth spécifique par PID"""
+        try:
+            # Format de réveil Bluetooth
+            inner_data = {
+                "method": "wakeup",
+                "params": {
+                    "pid": str(pid),
+                    "deviceSerialnum": str(pid)
+                }
+            }
+            
+            payload = {"data": json.dumps(inner_data)}
+            endpoint = self.endpoints["device_control"]
+            
+            _LOGGER.debug(f"Waking up Bluetooth device {pid}...")
+            data = await self._make_request(endpoint, payload)
+            
+            if data and data.get("code") == "000":
+                _LOGGER.info(f"Bluetooth device {pid} wakeup successful")
                 return True
             else:
-                _LOGGER.warning(f"outletCtrl failed for {pid}, trying alternative methods...")
-        
-        # Si outletCtrl échoue ou pas de PID, essayer d'autres méthodes pour appareils WiFi
-        _LOGGER.info(f"Trying alternative control methods for device {pid}")
-        
-        # Méthode alternative pour appareils WiFi/Hybrides
-        # Peut nécessiter un endpoint différent selon le type d'appareil
-        alternative_methods = [
-            {"method": "deviceControl", "deviceId": str(pid)},
-            {"method": "setDeviceStatus", "deviceId": str(pid), "status": on, "brightness": pwm},
-            {"method": "wifiControl", "deviceId": str(pid), "power": on, "level": pwm}
-        ]
-        
-        for alt_method in alternative_methods:
-            try:
-                alt_payload = {"data": json.dumps(alt_method)}
-                data = await self._make_request(self.endpoints["device_control"], alt_payload)
+                _LOGGER.warning(f"Bluetooth device {pid} wakeup failed: {data}")
                 
-                if data and data.get('code') == '000':
-                    _LOGGER.info(f"Alternative control successful for {pid}: {alt_method['method']}")
+                # Essayer format alternatif
+                alt_inner_data = {
+                    "method": "bluetoothWakeup",
+                    "params": {
+                        "pid": str(pid)
+                    }
+                }
+                alt_payload = {"data": json.dumps(alt_inner_data)}
+                alt_data = await self._make_request(endpoint, alt_payload)
+                
+                if alt_data and alt_data.get("code") == "000":
+                    _LOGGER.info(f"Bluetooth device {pid} alternative wakeup successful")
                     return True
-            except Exception as e:
-                _LOGGER.debug(f"Alternative method {alt_method['method']} failed: {e}")
-                continue
+                else:
+                    _LOGGER.warning(f"All wakeup methods failed for {pid}")
+                    return False
+                
+        except Exception as e:
+            _LOGGER.error(f"Bluetooth device wakeup error for {pid}: {e}")
+            return False
+
+    async def _verify_bluetooth_command(self, pid: str):
+        """Vérifier qu'une commande Bluetooth a bien été reçue"""
+        try:
+            # Demander le statut de l'appareil pour vérifier
+            inner_data = {
+                "method": "getDeviceStatus",
+                "params": {
+                    "pid": str(pid)
+                }
+            }
+            
+            payload = {"data": json.dumps(inner_data)}
+            endpoint = self.endpoints["device_control"]
+            
+            data = await self._make_request(endpoint, payload)
+            
+            if data and data.get("code") == "000":
+                # Si on reçoit une réponse, c'est que l'appareil est connecté
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            _LOGGER.debug(f"Status verification failed for {pid}: {e}")
+            return False
+
+    # =============================
+    # NOUVELLES MÉTHODES BLUETOOTH BLE
+    # =============================
+
+    async def detect_device_mode(self):
+        """Détecter si l'appareil est en mode Bluetooth ou WiFi"""
+        try:
+            device_data = await self.get_lightdata()
+            if not device_data:
+                return False
+            
+            self.is_bluetooth_device = device_data.get('isBluetoothDeivice', False)
+            self.device_serial = device_data.get('deviceSerialnum')
+            
+            if self.is_bluetooth_device:
+                _LOGGER.info(f"Device detected as Bluetooth: {self.device_serial}")
+                if self.bluetooth_support:
+                    _LOGGER.info("Bluetooth BLE support available")
+                    return await self._scan_for_ble_device()
+                else:
+                    _LOGGER.warning("Device is Bluetooth but bleak library not available")
+                    return False
+            else:
+                _LOGGER.info("Device detected as WiFi/Cloud")
+                return True
+                
+        except Exception as e:
+            _LOGGER.error(f"Device mode detection failed: {e}")
+            return False
+
+    async def _scan_for_ble_device(self):
+        """Scanner et trouver l'appareil BLE MarsPro"""
+        if not self.bluetooth_support:
+            _LOGGER.error("Bluetooth support not available")
+            return False
         
-        error_msg = data.get('msg', 'Unknown error') if 'data' in locals() and data else "No response"
-        _LOGGER.error(f"All control methods failed for {pid}: {error_msg}")
-        return False 
+        try:
+            _LOGGER.info("Scanning for MarsPro BLE device...")
+            devices = await BleakScanner.discover(timeout=10.0)
+            
+            target_id = self.device_serial
+            
+            for device in devices:
+                device_name = device.name or ""
+                device_addr = device.address
+                
+                # Chercher correspondance par nom ou adresse MAC
+                if (target_id and target_id.lower() in device_name.lower()) or \
+                   (target_id and target_id.lower() in device_addr.lower().replace(':', '')):
+                    _LOGGER.info(f"Found MarsPro BLE device: {device_name} ({device_addr})")
+                    self.ble_device = device
+                    return True
+            
+            _LOGGER.warning(f"MarsPro BLE device not found (looking for: {target_id})")
+            return False
+            
+        except Exception as e:
+            _LOGGER.error(f"BLE device scan failed: {e}")
+            return False
+
+    async def _ble_connect(self):
+        """Se connecter à l'appareil BLE"""
+        if not self.ble_device or not self.bluetooth_support:
+            return False
+        
+        try:
+            self.ble_client = BleakClient(self.ble_device.address)
+            await self.ble_client.connect()
+            _LOGGER.info(f"Connected to BLE device: {self.ble_device.address}")
+            return True
+        except Exception as e:
+            _LOGGER.error(f"BLE connection failed: {e}")
+            return False
+
+    async def _ble_disconnect(self):
+        """Se déconnecter de l'appareil BLE"""
+        if self.ble_client and await self.ble_client.is_connected():
+            await self.ble_client.disconnect()
+            _LOGGER.info("Disconnected from BLE device")
+
+    async def _ble_control_device(self, on: bool, pwm: int = 100):
+        """Contrôler l'appareil via Bluetooth BLE direct"""
+        if not self.bluetooth_support or not self.ble_device:
+            _LOGGER.error("BLE control not available")
+            return False
+        
+        try:
+            # Se connecter si pas déjà connecté
+            if not self.ble_client or not await self.ble_client.is_connected():
+                if not await self._ble_connect():
+                    return False
+            
+            # Obtenir les services de l'appareil
+            services = await self.ble_client.get_services()
+            
+            # Chercher les caractéristiques d'écriture
+            write_characteristics = []
+            for service in services.services:
+                for char in service.characteristics:
+                    if "write" in char.properties:
+                        write_characteristics.append(char)
+            
+            if not write_characteristics:
+                _LOGGER.error("No writable characteristics found")
+                return False
+            
+            # Commandes BLE possibles (à adapter selon le reverse engineering)
+            commands = [
+                bytes([0x01 if on else 0x00, 0x00, min(255, pwm * 255 // 100)]),  # Format 1
+                bytes([0x55, 0xAA, 0x01 if on else 0x00, min(255, pwm * 255 // 100)]),  # Format 2 avec header
+                bytes([0xFF, 0x01 if on else 0x00, min(255, pwm * 255 // 100)]),  # Format 3
+            ]
+            
+            # Essayer sur la première caractéristique d'écriture
+            char = write_characteristics[0]
+            
+            for i, command in enumerate(commands):
+                try:
+                    _LOGGER.debug(f"Trying BLE command {i+1}: {command.hex()}")
+                    await self.ble_client.write_gatt_char(char.uuid, command)
+                    _LOGGER.info(f"BLE command sent successfully: on={on}, pwm={pwm}")
+                    
+                    # Attendre un peu pour que la commande prenne effet
+                    await asyncio.sleep(1)
+                    return True
+                    
+                except Exception as e:
+                    _LOGGER.debug(f"BLE command {i+1} failed: {e}")
+                    continue
+            
+            _LOGGER.error("All BLE commands failed")
+            return False
+            
+        except Exception as e:
+            _LOGGER.error(f"BLE control failed: {e}")
+            return False
+        finally:
+            # Optionnel: se déconnecter après usage
+            # await self._ble_disconnect()
+            pass
+
+    async def control_device_hybrid(self, on: bool, pwm: int = 100):
+        """Contrôle hybride: BLE direct si Bluetooth, Cloud si WiFi"""
+        # Détecter le mode si pas déjà fait
+        if not hasattr(self, 'is_bluetooth_device'):
+            await self.detect_device_mode()
+        
+        if self.is_bluetooth_device and self.bluetooth_support:
+            _LOGGER.info("Using Bluetooth BLE direct control")
+            
+            # Essayer d'abord le contrôle BLE direct
+            ble_success = await self._ble_control_device(on, pwm)
+            
+            if ble_success:
+                return True
+            else:
+                _LOGGER.warning("BLE control failed, falling back to cloud API")
+                # Fallback vers API cloud même pour Bluetooth
+                return await self.control_device_by_pid(self.device_serial, on, pwm)
+        else:
+            _LOGGER.info("Using Cloud API control")
+            # Utiliser API cloud pour WiFi
+            pid = self.device_serial
+            if not pid:
+                device_data = await self.get_lightdata()
+                pid = device_data.get('device_pid_stable') if device_data else None
+            
+            if pid:
+                return await self.control_device_by_pid(pid, on, pwm)
+            else:
+                _LOGGER.error("No device PID available for control")
+                return False 

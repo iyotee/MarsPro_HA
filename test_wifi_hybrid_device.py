@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-🌐 TEST APPAREIL BLUETOOTH+WIFI - Nouveaux endpoints
-Teste des appareils Bluetooth connectés via WiFi
+📶 TEST APPAREIL WIFI/HYBRIDE
+Test de détection et contrôle d'appareils WiFi MarsPro
 """
 
 import asyncio
@@ -379,113 +379,189 @@ class MarsProWiFiDeviceDetector:
                     print(f"   ❌ Contrôle échoué")
                     return False
 
-async def main():
-    print("🌐 TEST APPAREIL BLUETOOTH+WIFI HYBRIDE")
+async def test_wifi_device():
+    """Test spécifique pour appareils WiFi/Hybrides"""
+    print("📶 TEST APPAREIL WIFI/HYBRIDE")
     print("=" * 50)
-    print("💡 Appareil Bluetooth connecté via réseau WiFi")
+    print("🎯 Détection et contrôle d'appareils connectés WiFi")
     print()
     
     email = "jeremy.noverraz2@proton.me"
     password = "T00rT00r"
     
     try:
-        detector = MarsProWiFiDeviceDetector(email, password)
+        # Connexion API
+        print("🔧 Connexion à l'API MarsPro...")
+        api = MarsProAPI(email, password)
+        await api.login()
+        print("✅ Connecté à l'API MarsPro")
         
-        # Connexion
-        await detector.login()
-        print("✅ Connexion réussie")
+        # Récupération de TOUS les appareils
+        print("\n📱 Recherche de tous les appareils...")
+        all_devices = await api.get_all_devices()
         
-        # Récupérer l'appareil
-        devices = await detector.test_correct_payload_from_captures()
-        if not devices:
+        if not all_devices:
             print("❌ Aucun appareil trouvé")
             return False
+        
+        print(f"✅ {len(all_devices)} appareil(s) trouvé(s)")
+        print()
+        
+        # Analyser chaque appareil
+        wifi_devices = []
+        bluetooth_devices = []
+        
+        for i, device in enumerate(all_devices, 1):
+            device_name = device.get("deviceName", "N/A")
+            device_id = device.get("id", "N/A")
+            is_online = device.get("isOnline", False)
+            is_net_device = device.get("isNetDevice", False)
+            connection_type = device.get("connection_type", "Unknown")
+            stable_pid = (device.get("extracted_pid") or 
+                         device.get("deviceSerialnum") or 
+                         device.get("devicePid"))
             
-        print(f"📱 Appareils trouvés: {', '.join([device['deviceName'] for device in devices])}")
-        print()
-        
-        # Tests spécialisés pour WiFi
-        test_brightness = 85
-        
-        print("🧪 TEST 1: Endpoint Android Mine")
-        print("-" * 40)
-        result1 = await detector.test_device_control_with_found_devices(devices)
-        print("👀 REGARDEZ VOTRE LAMPE MAINTENANT !")
-        await asyncio.sleep(5)
-        print()
-        
-        print("🧪 TEST 2: Commande directe")
-        print("-" * 40)
-        result2 = await detector.test_device_control_with_found_devices(devices)
-        print("👀 REGARDEZ VOTRE LAMPE MAINTENANT !")
-        await asyncio.sleep(5)
-        print()
-        
-        print("🧪 TEST 3: Contrôle WiFi spécifique")
-        print("-" * 40)
-        result3 = await detector.test_device_control_with_found_devices(devices)
-        print("👀 REGARDEZ VOTRE LAMPE MAINTENANT !")
-        await asyncio.sleep(5)
-        print()
-        
-        print("🧪 TEST 4: outletCtrl mode WiFi")
-        print("-" * 40)
-        result4 = await detector.test_device_control_with_found_devices(devices)
-        print("👀 REGARDEZ VOTRE LAMPE MAINTENANT !")
-        await asyncio.sleep(5)
-        print()
-        
-        print("🧪 TEST 5: Switch OFF WiFi")
-        print("-" * 40)
-        result5 = await detector.test_device_control_with_found_devices(devices)
-        print("👀 LA LAMPE DOIT S'ÉTEINDRE !")
-        await asyncio.sleep(5)
-        print()
-        
-        print("🧪 TEST 6: Switch ON WiFi")
-        print("-" * 40)
-        result6 = await detector.test_device_control_with_found_devices(devices)
-        print("👀 LA LAMPE DOIT SE RALLUMER !")
-        await asyncio.sleep(5)
-        print()
-        
-        # Résumé
-        print("📊 RÉSUMÉ DES TESTS WIFI")
-        print("=" * 40)
-        
-        tests = [
-            ("Android Mine", result1),
-            ("Commande directe", result2),
-            ("Contrôle WiFi", result3),
-            ("outletCtrl WiFi", result4),
-            ("Switch OFF WiFi", result5),
-            ("Switch ON WiFi", result6)
-        ]
-        
-        working_tests = []
-        for name, result in tests:
-            if result and result.get("code") == "000":
-                print(f"✅ {name}: SUCCÈS")
-                working_tests.append(name)
-            elif result:
-                print(f"⚠️  {name}: Échec - Code: {result.get('code')}, Msg: {result.get('msg')}")
+            print(f"📱 Appareil {i}: {device_name}")
+            print(f"   ID: {device_id}")
+            print(f"   PID: {stable_pid}")
+            print(f"   En ligne: {is_online}")
+            print(f"   Appareil réseau: {is_net_device}")
+            print(f"   Type connexion: {connection_type}")
+            
+            if connection_type == "WiFi" or is_net_device:
+                wifi_devices.append(device)
+                print(f"   ✅ → Appareil WiFi détecté !")
             else:
-                print(f"❌ {name}: Aucune réponse")
-        
-        print(f"\n🎊 TESTS TERMINÉS !")
-        print(f"❓ VOTRE LAMPE A-T-ELLE RÉAGI ?")
-        
-        if working_tests:
-            print(f"✅ Tests techniques réussis: {', '.join(working_tests)}")
-            print(f"💡 Si la lampe a réagi = PROBLÈME RÉSOLU !")
-        else:
-            print(f"⚠️  Tous les tests ont échoué techniquement")
+                bluetooth_devices.append(device)
+                print(f"   🔵 → Appareil Bluetooth seul")
             
-        return True
+            print()
+        
+        # Tests spécifiques selon le type
+        if wifi_devices:
+            print("📶 TESTS APPAREILS WIFI:")
+            print("-" * 40)
+            
+            for device in wifi_devices:
+                device_name = device.get("deviceName")
+                device_id = device.get("id")
+                stable_pid = (device.get("extracted_pid") or 
+                             device.get("deviceSerialnum") or 
+                             device.get("devicePid"))
+                
+                print(f"\n🎯 Test WiFi pour: {device_name}")
+                
+                # Test 1: Format WiFi avec ID
+                print(f"📤 Test 1: Format WiFi avec device ID...")
+                success = await test_wifi_control_by_id(api, device_id, 60)
+                if success:
+                    print(f"   ✅ SUCCÈS WiFi avec ID !")
+                    return True
+                else:
+                    print(f"   ❌ Échec WiFi avec ID")
+                
+                # Test 2: Format hybride
+                print(f"📤 Test 2: Format hybride...")
+                success = await test_hybrid_control(api, device_id, stable_pid, 60)
+                if success:
+                    print(f"   ✅ SUCCÈS format hybride !")
+                    return True
+                else:
+                    print(f"   ❌ Échec format hybride")
+                
+                await asyncio.sleep(2)
+        
+        if bluetooth_devices:
+            print("🔵 APPAREILS BLUETOOTH SEULS DÉTECTÉS:")
+            print("-" * 40)
+            for device in bluetooth_devices:
+                device_name = device.get("deviceName")
+                print(f"📱 {device_name}")
+            print(f"⚠️  Ces appareils nécessitent probablement une connexion WiFi")
+            print(f"   pour recevoir les commandes de l'API cloud !")
+        
+        print("\n" + "=" * 50)
+        print("🏁 ANALYSE TERMINÉE")
+        print()
+        print("📊 RÉSULTATS:")
+        print(f"   📶 Appareils WiFi: {len(wifi_devices)}")
+        print(f"   🔵 Appareils Bluetooth: {len(bluetooth_devices)}")
+        print()
+        print("💡 RECOMMANDATION:")
+        if wifi_devices:
+            print("   ✅ Appareils WiFi trouvés - contrôle possible")
+        else:
+            print("   ⚠️  Connectez vos appareils au WiFi pour le contrôle cloud")
+        
+        return len(wifi_devices) > 0
         
     except Exception as e:
-        print(f"❌ Erreur générale: {e}")
+        print(f"❌ Erreur dans le test: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+async def test_wifi_control_by_id(api, device_id, brightness):
+    """Test contrôle WiFi avec device ID"""
+    try:
+        # Format WiFi spécifique
+        inner_data = {
+            "method": "wifiControl",
+            "params": {
+                "deviceId": str(device_id),
+                "brightness": int(brightness),
+                "power": 1
+            }
+        }
+        
+        payload = {"data": json.dumps(inner_data)}
+        endpoint = api.endpoints["device_control"]
+        
+        data = await api._make_request(endpoint, payload)
+        
+        if data and data.get('code') == '000':
+            print(f"      ✅ Commande WiFi réussie")
+            await asyncio.sleep(3)  # Attendre pour voir l'effet
+            return True
+        else:
+            print(f"      ❌ Commande WiFi échouée: {data}")
+            return False
+            
+    except Exception as e:
+        print(f"      ❌ Exception WiFi: {e}")
+        return False
+
+async def test_hybrid_control(api, device_id, pid, brightness):
+    """Test contrôle hybride (WiFi + Bluetooth data)"""
+    try:
+        # Format hybride
+        inner_data = {
+            "method": "hybridControl",
+            "params": {
+                "deviceId": str(device_id),
+                "pid": str(pid),
+                "brightness": int(brightness),
+                "power": 1,
+                "type": "wifi"
+            }
+        }
+        
+        payload = {"data": json.dumps(inner_data)}
+        endpoint = api.endpoints["device_control"]
+        
+        data = await api._make_request(endpoint, payload)
+        
+        if data and data.get('code') == '000':
+            print(f"      ✅ Commande hybride réussie")
+            await asyncio.sleep(3)
+            return True
+        else:
+            print(f"      ❌ Commande hybride échouée: {data}")
+            return False
+            
+    except Exception as e:
+        print(f"      ❌ Exception hybride: {e}")
         return False
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(test_wifi_device()) 
