@@ -630,8 +630,8 @@ class MarsProAPI:
             if self.is_bluetooth_device:
                 _LOGGER.info(f"Device detected as Bluetooth: {self.device_serial}")
                 if self.bluetooth_support:
-                    _LOGGER.info("Bluetooth BLE support available")
-                    return await self._scan_for_ble_device()
+                    _LOGGER.info("Bluetooth BLE support available - trying enhanced detection")
+                    return await self._enhanced_ble_detection()
                 else:
                     _LOGGER.warning("Device is Bluetooth but bleak library not available")
                     return False
@@ -643,14 +643,48 @@ class MarsProAPI:
             _LOGGER.error(f"Device mode detection failed: {e}")
             return False
 
-    async def _scan_for_ble_device(self):
-        """Scanner et trouver l'appareil BLE MarsPro"""
+    async def _enhanced_ble_detection(self):
+        """Détection BLE améliorée avec multiples techniques"""
         if not self.bluetooth_support:
             _LOGGER.error("Bluetooth support not available")
             return False
         
+        target_id = self.device_serial
+        _LOGGER.info(f"Enhanced BLE detection for device: {target_id}")
+        
+        # Technique 1: Scan standard BLE
+        ble_found = await self._scan_for_ble_device()
+        if ble_found:
+            return True
+        
+        # Technique 2: Scan plus long avec filtres multiples
+        _LOGGER.info("Standard scan failed, trying extended scan...")
+        ble_found = await self._extended_ble_scan(target_id)
+        if ble_found:
+            return True
+        
+        # Technique 3: Scan par patterns de noms MarsPro
+        _LOGGER.info("Extended scan failed, trying pattern-based scan...")
+        ble_found = await self._pattern_based_ble_scan()
+        if ble_found:
+            return True
+        
+        # Technique 4: Scan par adresse MAC approximative
+        _LOGGER.info("Pattern scan failed, trying MAC-based scan...")
+        ble_found = await self._mac_based_ble_scan(target_id)
+        if ble_found:
+            return True
+        
+        _LOGGER.warning("All BLE detection methods failed - device may not be in pairing mode or out of range")
+        return False
+
+    async def _scan_for_ble_device(self):
+        """Scanner et trouver l'appareil BLE MarsPro (méthode standard)"""
+        if not self.bluetooth_support:
+            return False
+        
         try:
-            _LOGGER.info("Scanning for MarsPro BLE device...")
+            _LOGGER.info("Standard BLE scan (10 seconds)...")
             devices = await BleakScanner.discover(timeout=10.0)
             
             target_id = self.device_serial
@@ -659,18 +693,119 @@ class MarsProAPI:
                 device_name = device.name or ""
                 device_addr = device.address
                 
-                # Chercher correspondance par nom ou adresse MAC
+                # Chercher correspondance exacte
                 if (target_id and target_id.lower() in device_name.lower()) or \
                    (target_id and target_id.lower() in device_addr.lower().replace(':', '')):
-                    _LOGGER.info(f"Found MarsPro BLE device: {device_name} ({device_addr})")
+                    _LOGGER.info(f"Found MarsPro BLE device (standard): {device_name} ({device_addr})")
                     self.ble_device = device
                     return True
             
-            _LOGGER.warning(f"MarsPro BLE device not found (looking for: {target_id})")
+            _LOGGER.debug(f"Standard scan: {len(devices)} devices found, no match for {target_id}")
             return False
             
         except Exception as e:
-            _LOGGER.error(f"BLE device scan failed: {e}")
+            _LOGGER.error(f"Standard BLE scan failed: {e}")
+            return False
+
+    async def _extended_ble_scan(self, target_id):
+        """Scan BLE étendu avec timeout plus long"""
+        try:
+            _LOGGER.info("Extended BLE scan (20 seconds)...")
+            devices = await BleakScanner.discover(timeout=20.0)
+            
+            # Patterns de recherche plus flexibles
+            search_patterns = [
+                target_id.lower() if target_id else "",
+                target_id[:8].lower() if target_id and len(target_id) >= 8 else "",
+                target_id[-8:].lower() if target_id and len(target_id) >= 8 else "",
+                "mars", "pro", "mh-", "dimbox", "345f45"
+            ]
+            
+            for device in devices:
+                device_name = (device.name or "").lower()
+                device_addr = device.address.lower().replace(':', '')
+                
+                # Recherche par patterns
+                for pattern in search_patterns:
+                    if pattern and (pattern in device_name or pattern in device_addr):
+                        _LOGGER.info(f"Found potential MarsPro device (extended): {device.name} ({device.address}) - matched pattern: {pattern}")
+                        self.ble_device = device
+                        return True
+            
+            _LOGGER.debug(f"Extended scan: {len(devices)} devices found, no pattern matches")
+            return False
+            
+        except Exception as e:
+            _LOGGER.error(f"Extended BLE scan failed: {e}")
+            return False
+
+    async def _pattern_based_ble_scan(self):
+        """Scan basé sur des patterns de noms MarsPro connus"""
+        try:
+            _LOGGER.info("Pattern-based BLE scan (15 seconds)...")
+            devices = await BleakScanner.discover(timeout=15.0)
+            
+            # Patterns MarsPro connus
+            marspro_patterns = [
+                "mars", "pro", "mh-", "dimbox", "led", "light", 
+                "345f", "73cc", "bluetooth", "ble"
+            ]
+            
+            # Log tous les appareils trouvés pour debug
+            _LOGGER.info(f"Pattern scan found {len(devices)} BLE devices:")
+            for i, device in enumerate(devices):
+                device_name = device.name or "Unknown"
+                _LOGGER.info(f"  {i+1}. {device_name} ({device.address})")
+                
+                # Vérifier patterns
+                device_name_lower = device_name.lower()
+                for pattern in marspro_patterns:
+                    if pattern in device_name_lower:
+                        _LOGGER.info(f"Found MarsPro device by pattern '{pattern}': {device_name} ({device.address})")
+                        self.ble_device = device
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            _LOGGER.error(f"Pattern-based BLE scan failed: {e}")
+            return False
+
+    async def _mac_based_ble_scan(self, target_id):
+        """Scan basé sur des fragments d'adresse MAC"""
+        try:
+            _LOGGER.info("MAC-based BLE scan (15 seconds)...")
+            devices = await BleakScanner.discover(timeout=15.0)
+            
+            if not target_id or len(target_id) < 6:
+                return False
+            
+            # Créer des fragments de MAC possibles à partir du PID
+            mac_fragments = [
+                target_id[:2], target_id[2:4], target_id[4:6],
+                target_id[6:8], target_id[8:10], target_id[10:12],
+                target_id[:4], target_id[-4:], target_id[4:8]
+            ]
+            
+            for device in devices:
+                device_addr = device.address.lower().replace(':', '')
+                
+                # Vérifier si des fragments du PID apparaissent dans l'adresse MAC
+                matches = 0
+                for fragment in mac_fragments:
+                    if fragment and len(fragment) >= 2 and fragment.lower() in device_addr:
+                        matches += 1
+                
+                # Si au moins 2 fragments correspondent, c'est probablement notre appareil
+                if matches >= 2:
+                    _LOGGER.info(f"Found probable MarsPro device by MAC fragments: {device.name} ({device.address}) - {matches} matches")
+                    self.ble_device = device
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            _LOGGER.error(f"MAC-based BLE scan failed: {e}")
             return False
 
     async def _ble_connect(self):
@@ -694,7 +829,7 @@ class MarsProAPI:
             _LOGGER.info("Disconnected from BLE device")
 
     async def _ble_control_device(self, on: bool, pwm: int = 100):
-        """Contrôler l'appareil via Bluetooth BLE direct"""
+        """Contrôler l'appareil via Bluetooth BLE direct avec protocoles multiples"""
         if not self.bluetooth_support or not self.ble_device:
             _LOGGER.error("BLE control not available")
             return False
@@ -708,80 +843,251 @@ class MarsProAPI:
             # Obtenir les services de l'appareil
             services = await self.ble_client.get_services()
             
-            # Chercher les caractéristiques d'écriture
+            # Log tous les services pour debug
+            _LOGGER.info(f"BLE services found: {len(services.services)}")
+            for service in services.services:
+                _LOGGER.debug(f"Service: {service.uuid}")
+                for char in service.characteristics:
+                    _LOGGER.debug(f"  Characteristic: {char.uuid} - Properties: {char.properties}")
+            
+            # Chercher toutes les caractéristiques d'écriture
             write_characteristics = []
             for service in services.services:
                 for char in service.characteristics:
-                    if "write" in char.properties:
+                    if "write" in char.properties or "write-without-response" in char.properties:
                         write_characteristics.append(char)
             
             if not write_characteristics:
                 _LOGGER.error("No writable characteristics found")
                 return False
             
-            # Commandes BLE possibles (à adapter selon le reverse engineering)
-            commands = [
-                bytes([0x01 if on else 0x00, 0x00, min(255, pwm * 255 // 100)]),  # Format 1
-                bytes([0x55, 0xAA, 0x01 if on else 0x00, min(255, pwm * 255 // 100)]),  # Format 2 avec header
-                bytes([0xFF, 0x01 if on else 0x00, min(255, pwm * 255 // 100)]),  # Format 3
+            _LOGGER.info(f"Found {len(write_characteristics)} writable characteristics")
+            
+            # Protocoles BLE MarsPro possibles (basés sur reverse engineering typique)
+            pwm_byte = min(255, pwm * 255 // 100)
+            on_byte = 0x01 if on else 0x00
+            
+            protocols = [
+                # Protocole 1: Simple 3 bytes
+                bytes([on_byte, 0x00, pwm_byte]),
+                
+                # Protocole 2: Avec header/footer
+                bytes([0x55, 0xAA, on_byte, pwm_byte, 0xFF]),
+                
+                # Protocole 3: Format étendu
+                bytes([0xFF, 0x01, on_byte, 0x00, pwm_byte, 0x00, 0x00, 0xEE]),
+                
+                # Protocole 4: Format MarsPro supposé
+                bytes([0x4D, 0x50, on_byte, pwm_byte]),  # "MP" + commande
+                
+                # Protocole 5: Format PWM étendu
+                bytes([0x01, on_byte, pwm_byte, pwm_byte ^ 0xFF]),  # Avec checksum XOR
+                
+                # Protocole 6: Format court
+                bytes([on_byte, pwm_byte]),
+                
+                # Protocole 7: Format avec ID
+                bytes([0x01, 0x02, on_byte, pwm_byte, 0x03, 0x04]),
             ]
             
-            # Essayer sur la première caractéristique d'écriture
-            char = write_characteristics[0]
+            # Essayer chaque protocole sur chaque caractéristique
+            for i, char in enumerate(write_characteristics):
+                _LOGGER.info(f"Trying characteristic {i+1}: {char.uuid}")
+                
+                for j, protocol in enumerate(protocols):
+                    try:
+                        _LOGGER.debug(f"  Protocol {j+1}: {protocol.hex()}")
+                        
+                        # Essayer write avec réponse
+                        try:
+                            await self.ble_client.write_gatt_char(char.uuid, protocol, response=True)
+                            _LOGGER.info(f"BLE write successful (char {i+1}, protocol {j+1}): on={on}, pwm={pwm}")
+                            await asyncio.sleep(2)  # Attendre l'effet
+                            return True
+                        except:
+                            # Essayer write sans réponse
+                            await self.ble_client.write_gatt_char(char.uuid, protocol, response=False)
+                            _LOGGER.info(f"BLE write-without-response successful (char {i+1}, protocol {j+1}): on={on}, pwm={pwm}")
+                            await asyncio.sleep(2)  # Attendre l'effet
+                            return True
+                            
+                    except Exception as e:
+                        _LOGGER.debug(f"  Protocol {j+1} failed: {e}")
+                        continue
             
-            for i, command in enumerate(commands):
-                try:
-                    _LOGGER.debug(f"Trying BLE command {i+1}: {command.hex()}")
-                    await self.ble_client.write_gatt_char(char.uuid, command)
-                    _LOGGER.info(f"BLE command sent successfully: on={on}, pwm={pwm}")
-                    
-                    # Attendre un peu pour que la commande prenne effet
-                    await asyncio.sleep(1)
-                    return True
-                    
-                except Exception as e:
-                    _LOGGER.debug(f"BLE command {i+1} failed: {e}")
-                    continue
-            
-            _LOGGER.error("All BLE commands failed")
+            _LOGGER.error("All BLE protocols failed on all characteristics")
             return False
             
         except Exception as e:
             _LOGGER.error(f"BLE control failed: {e}")
             return False
         finally:
-            # Optionnel: se déconnecter après usage
-            # await self._ble_disconnect()
+            # Garder la connexion ouverte pour les prochaines commandes
             pass
 
     async def control_device_hybrid(self, on: bool, pwm: int = 100):
-        """Contrôle hybride: BLE direct si Bluetooth, Cloud si WiFi"""
-        # Détecter le mode si pas déjà fait
+        """Contrôle hybride ultra-robuste: toutes les méthodes possibles"""
+        _LOGGER.info(f"Starting hybrid control: on={on}, pwm={pwm}")
+        
+        # Étape 1: Détecter le mode si pas déjà fait
         if not hasattr(self, 'is_bluetooth_device'):
+            _LOGGER.info("Detecting device mode...")
             await self.detect_device_mode()
         
+        # Étape 2: Essayer Bluetooth BLE si disponible
         if self.is_bluetooth_device and self.bluetooth_support:
-            _LOGGER.info("Using Bluetooth BLE direct control")
+            _LOGGER.info("Attempting Bluetooth BLE direct control...")
             
-            # Essayer d'abord le contrôle BLE direct
             ble_success = await self._ble_control_device(on, pwm)
-            
             if ble_success:
+                _LOGGER.info("Bluetooth BLE control successful!")
                 return True
             else:
-                _LOGGER.warning("BLE control failed, falling back to cloud API")
-                # Fallback vers API cloud même pour Bluetooth
-                return await self.control_device_by_pid(self.device_serial, on, pwm)
-        else:
-            _LOGGER.info("Using Cloud API control")
-            # Utiliser API cloud pour WiFi
-            pid = self.device_serial
-            if not pid:
-                device_data = await self.get_lightdata()
-                pid = device_data.get('device_pid_stable') if device_data else None
-            
-            if pid:
-                return await self.control_device_by_pid(pid, on, pwm)
+                _LOGGER.warning("Bluetooth BLE control failed, trying cloud fallback...")
+        
+        # Étape 3: Fallback Cloud API avec activation préalable
+        _LOGGER.info("Attempting Cloud API control with activation...")
+        
+        # Sous-étape 3a: Activation setDeviceActiveV (crucial pour Bluetooth)
+        try:
+            activation_success = await self._activate_device_for_cloud()
+            if activation_success:
+                _LOGGER.info("Device activation successful")
+                await asyncio.sleep(2)  # Attendre que l'activation prenne effet
             else:
-                _LOGGER.error("No device PID available for control")
-                return False 
+                _LOGGER.warning("Device activation failed, trying control anyway...")
+        except Exception as e:
+            _LOGGER.warning(f"Device activation error: {e}")
+        
+        # Sous-étape 3b: Contrôle par PID
+        pid = self.device_serial
+        if not pid:
+            device_data = await self.get_lightdata()
+            pid = device_data.get('device_pid_stable') if device_data else None
+        
+        if pid:
+            cloud_success = await self.control_device_by_pid(pid, on, pwm)
+            if cloud_success:
+                _LOGGER.info("Cloud API control successful!")
+                return True
+        
+        # Étape 4: Fallback méthodes legacy
+        _LOGGER.warning("All primary methods failed, trying legacy fallbacks...")
+        
+        # Sous-étape 4a: Legacy set_brightness
+        if on and pwm > 0:
+            try:
+                legacy_response = await self.set_brightness(pwm)
+                if legacy_response and legacy_response.get('code') == '000':
+                    _LOGGER.info("Legacy brightness control successful!")
+                    return True
+            except Exception as e:
+                _LOGGER.debug(f"Legacy brightness failed: {e}")
+        
+        # Sous-étape 4b: Legacy toggle_switch
+        try:
+            toggle_response = await self.toggle_switch(not on, pid or "")
+            if toggle_response and toggle_response.get('code') == '000':
+                _LOGGER.info("Legacy toggle control successful!")
+                return True
+        except Exception as e:
+            _LOGGER.debug(f"Legacy toggle failed: {e}")
+        
+        # Étape 5: Dernière tentative avec formats alternatifs
+        _LOGGER.warning("All standard methods failed, trying alternative formats...")
+        
+        alternative_success = await self._try_alternative_control_formats(on, pwm, pid)
+        if alternative_success:
+            _LOGGER.info("Alternative format control successful!")
+            return True
+        
+        _LOGGER.error("ALL CONTROL METHODS FAILED - device may be offline or incompatible")
+        return False
+
+    async def _activate_device_for_cloud(self):
+        """Activer l'appareil pour le cloud (setDeviceActiveV)"""
+        try:
+            activation = {
+                "method": "setDeviceActiveV",
+                "params": {
+                    "vid": str(self.user_id),
+                    "unum": "Mars Pro",
+                    "tOffset": 120
+                }
+            }
+            
+            payload = {"data": json.dumps(activation)}
+            response = await self._make_request("/api/upData/device", payload)
+            
+            return response and response.get('code') == '000'
+            
+        except Exception as e:
+            _LOGGER.error(f"Device activation failed: {e}")
+            return False
+
+    async def _try_alternative_control_formats(self, on: bool, pwm: int, pid: str):
+        """Essayer des formats de contrôle alternatifs"""
+        if not pid:
+            return False
+        
+        # Format 1: upDataStatus (vu dans certaines captures)
+        try:
+            alt_format_1 = {
+                "method": "upDataStatus",
+                "params": {
+                    "pid": pid,
+                    "switch": 1 if on else 0,
+                    "lastBright": pwm,
+                    "wifi": 1,
+                    "connect": 1
+                }
+            }
+            
+            payload = {"data": json.dumps(alt_format_1)}
+            response = await self._make_request("/api/upData/device", payload)
+            
+            if response and response.get('code') == '000':
+                return True
+        except:
+            pass
+        
+        # Format 2: deviceControl simple
+        try:
+            alt_format_2 = {
+                "method": "deviceControl",
+                "params": {
+                    "deviceId": pid,
+                    "on": on,
+                    "brightness": pwm
+                }
+            }
+            
+            payload = {"data": json.dumps(alt_format_2)}
+            response = await self._make_request("/api/upData/device", payload)
+            
+            if response and response.get('code') == '000':
+                return True
+        except:
+            pass
+        
+        # Format 3: lightControl
+        try:
+            alt_format_3 = {
+                "method": "lightControl",
+                "params": {
+                    "pid": pid,
+                    "state": on,
+                    "pwm": pwm,
+                    "channel": 0
+                }
+            }
+            
+            payload = {"data": json.dumps(alt_format_3)}
+            response = await self._make_request("/api/upData/device", payload)
+            
+            if response and response.get('code') == '000':
+                return True
+        except:
+            pass
+        
+        return False 
