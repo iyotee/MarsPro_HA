@@ -43,6 +43,7 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
         self.bluetooth_devices = {}
         self.ble_connections = {}  # Tracking des connexions BLE actives
         self.is_bluetooth_device = False
+        self.ble_scan_failed = False
 
     async def _async_update_data(self):
         """Fetch data from API endpoint and detect devices."""
@@ -114,10 +115,12 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
                 )
             
             # Scanner Bluetooth si on a des appareils BLE (modèle hybride)
-            if bluetooth_count > 0:
+            if bluetooth_count > 0 and not self.ble_scan_failed:
                 _LOGGER.info(f"Found {bluetooth_count} Bluetooth devices, scanning BLE...")
                 _LOGGER.info("HYBRID MODEL: These devices need BLE connection + Cloud commands")
                 await self._scan_bluetooth_devices()
+            elif self.ble_scan_failed:
+                _LOGGER.warning("BLE scan previously failed, skipping BLE detection")
             
             self.devices = processed_devices
             
@@ -133,16 +136,52 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
     async def _scan_bluetooth_devices(self):
         """Scanner les appareils Bluetooth BLE MarsPro avec patterns découverts."""
         try:
-            # Tenter import bleak pour scan direct si scanner HA non dispo
+            # PRIORITÉ 1: Essayer scanner Home Assistant d'abord
+            _LOGGER.info("Trying Home Assistant Bluetooth scanner first...")
+            
+            try:
+                # Utiliser le scanner HA Bluetooth si disponible
+                if hasattr(self.hass.components, 'bluetooth'):
+                    bluetooth_component = self.hass.components.bluetooth
+                    
+                    # Méthode moderne HA 2024+
+                    if hasattr(bluetooth_component, 'async_discovered_service_info'):
+                        discovered = bluetooth_component.async_discovered_service_info(self.hass)
+                        
+                        for device_info in discovered:
+                            device_name = device_info.name or ""
+                            device_address = device_info.address
+                            
+                            if self._is_marspro_device_by_name_addr(device_name, device_address):
+                                _LOGGER.info(f"Found MarsPro via HA Bluetooth: {device_name} ({device_address})")
+                                
+                                self.bluetooth_devices[device_address] = {
+                                    'name': device_name,
+                                    'address': device_address,
+                                    'rssi': getattr(device_info, 'rssi', -50),
+                                    'is_reachable': True,
+                                    'via_ha_bluetooth': True
+                                }
+                                
+                                await self._correlate_ble_with_cloud_device_by_addr(device_address, device_name)
+                        
+                        if self.bluetooth_devices:
+                            _LOGGER.info(f"HA Bluetooth found {len(self.bluetooth_devices)} MarsPro devices")
+                            return
+                
+            except Exception as ha_bt_error:
+                _LOGGER.warning(f"HA Bluetooth scanner failed: {ha_bt_error}")
+            
+            # PRIORITÉ 2: Fallback vers Bleak
+            _LOGGER.info("Falling back to Bleak scanner...")
+            
             try:
                 from bleak import BleakScanner
                 
-                _LOGGER.info("Scanning Bluetooth BLE devices with Bleak...")
+                _LOGGER.info("Scanning with Bleak (20s timeout)...")
                 _LOGGER.info("Looking for MarsPro patterns: MH-DIMBOX, 345F45EC73CC...")
                 
-                devices = await BleakScanner.discover(timeout=15.0)
-                
-                self.bluetooth_devices = {}
+                devices = await BleakScanner.discover(timeout=20.0)
                 
                 for device in devices:
                     if self._is_marspro_device(device):
@@ -153,7 +192,8 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
                             'address': device.address,
                             'rssi': getattr(device, 'rssi', -50),
                             'device': device,
-                            'is_reachable': True  # Pour tracking connexion
+                            'is_reachable': True,
+                            'via_bleak': True
                         }
                         
                         _LOGGER.info(f"Found MarsPro BLE device: {device_name} ({device.address})")
@@ -162,21 +202,58 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
                         await self._correlate_ble_with_cloud_device(device)
                 
                 if not self.bluetooth_devices:
-                    _LOGGER.warning("No MarsPro BLE devices found!")
-                    _LOGGER.warning("Make sure device is in pairing mode (disconnect from MarsPro app)")
+                    _LOGGER.warning("No MarsPro BLE devices found with Bleak!")
+                    _LOGGER.warning("Device may not be in pairing mode")
+                    self.ble_scan_failed = True
                 
             except ImportError:
-                _LOGGER.warning("Bleak not available, trying HA Bluetooth scanner...")
-                
-                # Essayer le scanner HA en fallback
-                if hasattr(bluetooth, 'async_get_scanner'):
-                    scanner = bluetooth.async_get_scanner(self.hass)
-                    if scanner:
-                        # Note: L'API exacte peut varier selon la version HA
-                        _LOGGER.info("Using Home Assistant Bluetooth scanner")
+                _LOGGER.error("Bleak not available! Install: pip install bleak")
+                self.ble_scan_failed = True
+            except Exception as bleak_error:
+                _LOGGER.error(f"Bleak scan failed: {bleak_error}")
+                self.ble_scan_failed = True
                 
         except Exception as e:
-            _LOGGER.error(f"Bluetooth scan failed: {e}")
+            _LOGGER.error(f"Bluetooth scan completely failed: {e}")
+            self.ble_scan_failed = True
+
+    def _is_marspro_device_by_name_addr(self, device_name: str, device_address: str) -> bool:
+        """Vérifier si un appareil est MarsPro par nom et adresse."""
+        device_name_lower = device_name.lower()
+        device_addr_clean = device_address.lower().replace(":", "")
+        
+        # Patterns MarsPro découverts
+        name_patterns = ["mh-dimbox", "mars", "pro", "dimbox", "345f45ec73cc"]
+        
+        # Vérifier nom
+        for pattern in name_patterns:
+            if pattern in device_name_lower:
+                return True
+        
+        # Vérifier correspondance PID dans adresse
+        for device in self.devices:
+            if device.get('is_bluetooth') and device.get('pid'):
+                pid = device['pid'].lower()
+                if pid in device_addr_clean:
+                    return True
+        
+        return False
+
+    async def _correlate_ble_with_cloud_device_by_addr(self, ble_address: str, ble_name: str):
+        """Corréler par adresse et nom."""
+        ble_addr_clean = ble_address.replace(":", "").lower()
+        ble_name_lower = ble_name.lower()
+        
+        for cloud_device in self.devices:
+            if cloud_device.get('is_bluetooth') and cloud_device.get('pid'):
+                cloud_pid = cloud_device['pid'].lower()
+                
+                # Pattern découvert: 34:5F:45:EC:73:CE ≈ 345F45EC73CC
+                if cloud_pid in ble_addr_clean or "dimbox" in ble_name_lower:
+                    _LOGGER.info(f"CORRELATED: BLE {ble_name} ({ble_address}) ↔ Cloud {cloud_device['name']}")
+                    cloud_device['ble_address'] = ble_address
+                    cloud_device['ble_name'] = ble_name
+                    return
 
     async def _correlate_ble_with_cloud_device(self, ble_device):
         """Corréler appareil BLE avec appareil cloud basé sur nos découvertes."""
@@ -238,44 +315,71 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
         return [device for device in self.devices if device['entity_type'] == entity_type]
 
     async def establish_ble_connection(self, device_pid: str):
-        """Établir connexion BLE pour appareil hybride (NOUVELLE MÉTHODE)."""
+        """Établir connexion BLE pour appareil hybride (MÉTHODE AMÉLIORÉE)."""
         try:
-            from bleak import BleakClient
-            
             # Trouver l'appareil correspondant
             target_device = None
             for device in self.devices:
-                if device.get('pid') == device_pid and device.get('ble_address'):
+                if device.get('pid') == device_pid:
                     target_device = device
                     break
             
             if not target_device:
-                _LOGGER.error(f"No BLE device found for PID {device_pid}")
+                _LOGGER.error(f"No device found for PID {device_pid}")
                 return None
             
-            ble_address = target_device['ble_address']
+            # Vérifier si on a une adresse BLE
+            ble_address = target_device.get('ble_address')
+            if not ble_address:
+                _LOGGER.warning(f"No BLE address found for PID {device_pid}")
+                _LOGGER.warning("Device may not be in pairing mode or not detected by BLE scan")
+                return None
             
             # Si déjà connecté, retourner la connexion existante
             if ble_address in self.ble_connections:
                 client = self.ble_connections[ble_address]
-                if await client.is_connected():
-                    return client
-                else:
-                    # Nettoyer connexion morte
+                try:
+                    if await client.is_connected():
+                        _LOGGER.debug(f"Reusing existing BLE connection for {device_pid}")
+                        return client
+                    else:
+                        # Nettoyer connexion morte
+                        del self.ble_connections[ble_address]
+                except:
                     del self.ble_connections[ble_address]
             
-            # Établir nouvelle connexion
+            # Établir nouvelle connexion avec timeout
             _LOGGER.info(f"Establishing BLE connection to {target_device['name']} ({ble_address})")
             
-            client = BleakClient(ble_address)
-            await client.connect()
-            
-            if await client.is_connected():
-                self.ble_connections[ble_address] = client
-                _LOGGER.info(f"BLE connection established for {device_pid}")
-                return client
-            else:
-                _LOGGER.error(f"Failed to establish BLE connection for {device_pid}")
+            try:
+                from bleak import BleakClient
+                
+                client = BleakClient(ble_address, timeout=30.0)
+                
+                # Tentative de connexion avec retry
+                for attempt in range(3):
+                    try:
+                        _LOGGER.info(f"BLE connection attempt {attempt + 1}/3 for {device_pid}")
+                        await client.connect()
+                        
+                        if await client.is_connected():
+                            self.ble_connections[ble_address] = client
+                            _LOGGER.info(f"✅ BLE connection established for {device_pid}")
+                            return client
+                        
+                    except Exception as connect_error:
+                        _LOGGER.warning(f"BLE connection attempt {attempt + 1} failed: {connect_error}")
+                        if attempt < 2:  # Retry
+                            await asyncio.sleep(2)
+                            continue
+                        else:
+                            raise connect_error
+                
+                _LOGGER.error(f"❌ All BLE connection attempts failed for {device_pid}")
+                return None
+                
+            except ImportError:
+                _LOGGER.error("Bleak not available for BLE connection")
                 return None
                 
         except Exception as e:
@@ -296,8 +400,11 @@ class MarsHydroDataUpdateCoordinator(DataUpdateCoordinator):
                 ble_address = target_device['ble_address']
                 if ble_address in self.ble_connections:
                     client = self.ble_connections[ble_address]
-                    if await client.is_connected():
-                        await client.disconnect()
+                    try:
+                        if await client.is_connected():
+                            await client.disconnect()
+                    except:
+                        pass
                     del self.ble_connections[ble_address]
                     _LOGGER.info(f"BLE connection released for {device_pid}")
                     
