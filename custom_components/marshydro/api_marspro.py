@@ -4,6 +4,7 @@ import time
 import logging
 import asyncio
 import random
+import re
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -226,14 +227,17 @@ class MarsProAPI:
             _LOGGER.error(f"Device list failed: {error_msg}")
             return []
 
-    async def get_lightdata(self):
-        """Get light data using confirmed MarsPro endpoints."""
+    async def get_all_devices(self):
+        """Récupérer tous les appareils disponibles avec leurs PIDs réels"""
         await self._ensure_token()
 
-        # Utiliser l'endpoint de liste des dispositifs confirmé
+        # Payload EXACT découvert dans les captures d'écran de l'utilisateur !
+        # L'app MarsPro utilise deviceProductGroup pour catégoriser les appareils
+        # deviceProductGroup: 1 = Appareils Bluetooth/classiques (trouvé !)
         payload = {
-            "pageNum": 1,
-            "pageSize": 50  # Récupérer tous les dispositifs
+            "currentPage": 1,
+            "type": None,
+            "deviceProductGroup": 1  # Valeur correcte pour appareils Bluetooth
         }
         
         endpoint = self.endpoints["device_list"]
@@ -241,12 +245,66 @@ class MarsProAPI:
         
         if data and data.get('code') == '000':
             devices = data.get('data', {}).get('list', [])
-            if devices:
-                # Prendre le premier dispositif comme dispositif principal
-                device = devices[0]
-                self.device_serial = device.get("deviceSerialnum")
-                _LOGGER.info(f"MarsPro device found: {device.get('deviceName')} (PID: {self.device_serial})")
-                return device
+            _LOGGER.info(f"MarsPro found {len(devices)} total devices (Bluetooth)")
+            
+            # Log des informations détaillées sur chaque appareil
+            for i, device in enumerate(devices):
+                name = device.get("deviceName", "N/A")
+                device_id = device.get("id", "N/A")
+                pid = device.get("devicePid", "N/A") or device.get("deviceSerialnum", "N/A")
+                
+                # Extraire le PID du nom si pas disponible dans les champs standards
+                if pid == "N/A" or not pid:
+                    # Le nom contient souvent le PID: "MH-DIMBOX-345F45EC73CC"
+                    pid_match = re.search(r'([A-F0-9]{12})$', name)
+                    if pid_match:
+                        pid = pid_match.group(1)
+                        _LOGGER.info(f"Extracted PID from device name: {pid}")
+                
+                is_online = device.get("isOnline", "N/A")
+                is_net_device = device.get("isNetDevice", False)
+                device_mode = device.get("deviceMode", "N/A")
+                _LOGGER.info(f"Device {i+1}: {name} (ID: {device_id}, PID: {pid}) - Online: {is_online}, NetDevice: {is_net_device}, Mode: {device_mode}")
+            
+            return devices
+        else:
+            # Si deviceProductGroup: 1 ne donne rien, essayer d'autres valeurs
+            _LOGGER.warning("No devices found with deviceProductGroup: 1, trying other values...")
+            
+            for group_id in [2, 3, 4, 5, None]:
+                payload_alt = {
+                    "currentPage": 1,
+                    "type": None,
+                    "deviceProductGroup": group_id
+                }
+                
+                data_alt = await self._make_request(endpoint, payload_alt)
+                if data_alt and data_alt.get('code') == '000':
+                    devices_alt = data_alt.get('data', {}).get('list', [])
+                    if devices_alt:
+                        _LOGGER.info(f"Found {len(devices_alt)} devices with deviceProductGroup: {group_id}")
+                        return devices_alt
+            
+            _LOGGER.warning("No devices found in MarsPro with any deviceProductGroup")
+            return []
+
+    async def get_lightdata(self):
+        """Get light data using confirmed MarsPro endpoints."""
+        await self._ensure_token()
+
+        # Utiliser la nouvelle méthode avec le bon payload
+        devices = await self.get_all_devices()
+        
+        if devices:
+            # Prendre le premier dispositif comme dispositif principal
+            device = devices[0]
+            # Gérer les différents champs de PID selon le type d'appareil
+            self.device_serial = (device.get("devicePid") or 
+                                device.get("deviceSerialnum") or 
+                                str(device.get("id", "")))
+            
+            _LOGGER.info(f"MarsPro device found: {device.get('deviceName')} (ID: {device.get('id')}, PID: {self.device_serial})")
+            return device
         
         _LOGGER.warning("No devices found in MarsPro, trying fallback...")
         # Fallback vers l'API legacy si aucun dispositif trouvé
@@ -362,35 +420,6 @@ class MarsProAPI:
             }
         )
 
-    async def get_all_devices(self):
-        """Récupérer tous les appareils disponibles avec leurs PIDs réels"""
-        await self._ensure_token()
-
-        payload = {
-            "pageNum": 1,
-            "pageSize": 50
-        }
-        
-        endpoint = self.endpoints["device_list"]
-        data = await self._make_request(endpoint, payload)
-        
-        if data and data.get('code') == '000':
-            devices = data.get('data', {}).get('list', [])
-            _LOGGER.info(f"MarsPro found {len(devices)} total devices")
-            
-            # Log des informations détaillées sur chaque appareil
-            for i, device in enumerate(devices):
-                name = device.get("deviceName", "N/A")
-                pid = device.get("deviceSerialnum", "N/A")
-                status = "ON" if not device.get("isClose", False) else "OFF"
-                device_type = device.get("productType", "N/A")
-                _LOGGER.info(f"Device {i+1}: {name} (PID: {pid}) - {status} - Type: {device_type}")
-            
-            return devices
-        else:
-            _LOGGER.warning("No devices found in MarsPro")
-            return []
-
     async def get_device_by_name(self, device_name: str):
         """Récupérer un appareil spécifique par son nom"""
         devices = await self.get_all_devices()
@@ -408,28 +437,55 @@ class MarsProAPI:
         """Contrôler un appareil spécifique par son PID"""
         await self._ensure_token()
         
-        # Format outletCtrl avec PID spécifique
-        inner_data = {
-            "method": "outletCtrl",
-            "params": {
-                "pid": pid,
-                "num": 0,
-                "on": 1 if on else 0,
-                "pwm": int(pwm)
+        # D'abord essayer le contrôle avec PID (pour appareils Bluetooth)
+        if pid and len(str(pid)) > 5:  # Si on a un vrai PID
+            # Format outletCtrl avec PID spécifique
+            inner_data = {
+                "method": "outletCtrl",
+                "params": {
+                    "pid": str(pid),
+                    "num": 0,
+                    "on": 1 if on else 0,
+                    "pwm": int(pwm)
+                }
             }
-        }
+            
+            payload = {"data": json.dumps(inner_data)}
+            
+            _LOGGER.debug(f"Controlling device {pid}: on={on}, pwm={pwm}")
+            
+            endpoint = self.endpoints["device_control"]
+            data = await self._make_request(endpoint, payload)
+            
+            if data and data.get('code') == '000':
+                _LOGGER.info(f"Device {pid} control successful: on={on}, pwm={pwm}")
+                return True
+            else:
+                _LOGGER.warning(f"outletCtrl failed for {pid}, trying alternative methods...")
         
-        payload = {"data": json.dumps(inner_data)}
+        # Si outletCtrl échoue ou pas de PID, essayer d'autres méthodes pour appareils WiFi
+        _LOGGER.info(f"Trying alternative control methods for device {pid}")
         
-        _LOGGER.debug(f"Controlling device {pid}: on={on}, pwm={pwm}")
+        # Méthode alternative pour appareils WiFi/Hybrides
+        # Peut nécessiter un endpoint différent selon le type d'appareil
+        alternative_methods = [
+            {"method": "deviceControl", "deviceId": str(pid)},
+            {"method": "setDeviceStatus", "deviceId": str(pid), "status": on, "brightness": pwm},
+            {"method": "wifiControl", "deviceId": str(pid), "power": on, "level": pwm}
+        ]
         
-        endpoint = self.endpoints["device_control"]
-        data = await self._make_request(endpoint, payload)
+        for alt_method in alternative_methods:
+            try:
+                alt_payload = {"data": json.dumps(alt_method)}
+                data = await self._make_request(self.endpoints["device_control"], alt_payload)
+                
+                if data and data.get('code') == '000':
+                    _LOGGER.info(f"Alternative control successful for {pid}: {alt_method['method']}")
+                    return True
+            except Exception as e:
+                _LOGGER.debug(f"Alternative method {alt_method['method']} failed: {e}")
+                continue
         
-        if data and data.get('code') == '000':
-            _LOGGER.info(f"Device {pid} control successful: on={on}, pwm={pwm}")
-            return True
-        else:
-            error_msg = data.get('msg', 'Unknown error') if data else "No response"
-            _LOGGER.error(f"Device {pid} control failed: {error_msg}")
-            return False 
+        error_msg = data.get('msg', 'Unknown error') if 'data' in locals() and data else "No response"
+        _LOGGER.error(f"All control methods failed for {pid}: {error_msg}")
+        return False 
