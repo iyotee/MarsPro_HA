@@ -449,179 +449,81 @@ class MarsProAPI:
         return None
 
     async def control_device_by_pid(self, pid: str, on: bool, pwm: int = 100):
-        """Contrôler un appareil avec la séquence EXACTE de 4 requêtes des captures"""
+        """Contrôler l'appareil par PID avec le FORMAT EXACT des captures réseau"""
         await self._ensure_token()
         
-        _LOGGER.info(f"Starting 4-step control sequence for device {pid}: on={on}, pwm={pwm}")
-        
         try:
-            # ÉTAPE 1: Commande outletCtrl directe (comme dans la capture 1)
-            step1_success = await self._send_outlet_ctrl(pid, on, pwm)
-            if not step1_success:
-                _LOGGER.error("Step 1 (outletCtrl) failed")
-                return False
+            _LOGGER.info(f"MarsPro contrôle appareil: PID={pid}, on={on}, pwm={pwm}")
             
-            await asyncio.sleep(0.5)  # Petit délai entre les étapes
+            # FORMAT EXACT basé sur les captures réseau de l'app MarsPro officielle !
+            # Capture 4 montre: {"method":"setDeviceActive","pid":"345F45EC73CC","msgId":"1","msg":"1","code":200}
             
-            # ÉTAPE 2: Confirmation de la commande (comme dans la capture 2)
-            step2_success = await self._send_command_confirmation(pid, on, pwm)
-            if not step2_success:
-                _LOGGER.warning("Step 2 (confirmation) failed, continuing...")
+            if on:
+                # Pour allumer avec PWM - utiliser setDeviceActive + setBrightness
+                commands = [
+                    {
+                        "method": "setDeviceActive",
+                        "pid": pid,
+                        "msgId": "1", 
+                        "msg": "1",
+                        "code": 200,
+                        "active": True
+                    },
+                    {
+                        "method": "setBrightness", 
+                        "pid": pid,
+                        "msgId": "2",
+                        "msg": "1", 
+                        "code": 200,
+                        "brightness": pwm
+                    }
+                ]
+            else:
+                # Pour éteindre - setDeviceActive false
+                commands = [
+                    {
+                        "method": "setDeviceActive",
+                        "pid": pid, 
+                        "msgId": "1",
+                        "msg": "1",
+                        "code": 200,
+                        "active": False
+                    }
+                ]
             
-            await asyncio.sleep(0.5)
+            # Envoyer chaque commande avec le format exact des captures
+            success_count = 0
+            for i, command in enumerate(commands):
+                
+                # Payload EXACT format des captures : data contient JSON stringifié
+                payload = {
+                    "data": json.dumps(command)  # JSON stringifié comme dans les captures
+                }
+                
+                _LOGGER.debug(f"Commande {i+1}/{len(commands)}: {json.dumps(payload, indent=2)}")
+                
+                data = await self._make_request(self.endpoints["device_control"], payload)
+                
+                if data and data.get('code') == '000':
+                    success_count += 1
+                    _LOGGER.info(f"Commande {i+1} réussie: {command['method']}")
+                else:
+                    _LOGGER.error(f"Commande {i+1} échouée: {data}")
+                
+                # Petit délai entre les commandes
+                await asyncio.sleep(0.5)
             
-            # ÉTAPE 3: Mise à jour d'état upDataStat (comme dans la capture 3)
-            step3_success = await self._send_state_update(pid, on, pwm)
-            if not step3_success:
-                _LOGGER.warning("Step 3 (upDataStat) failed, continuing...")
+            total_success = success_count == len(commands)
             
-            await asyncio.sleep(0.5)
+            if total_success:
+                _LOGGER.info(f"Contrôle MarsPro réussi: {pid} -> on={on}, pwm={pwm}")
+            else:
+                _LOGGER.warning(f"Contrôle MarsPro partiel: {success_count}/{len(commands)} commandes réussies")
             
-            # ÉTAPE 4: Heartbeat/validation finale (comme dans la capture 4)
-            step4_success = await self._send_final_heartbeat(pid, on, pwm)
-            if not step4_success:
-                _LOGGER.warning("Step 4 (heartbeat) failed, but command may have succeeded")
-            
-            _LOGGER.info(f"4-step control sequence completed for {pid}")
-            return step1_success  # Le succès dépend principalement de l'étape 1
+            return total_success
             
         except Exception as e:
-            _LOGGER.error(f"Control sequence failed for {pid}: {e}")
-            return False
-
-    async def _send_outlet_ctrl(self, pid: str, on: bool, pwm: int):
-        """ÉTAPE 1: Envoyer la commande outletCtrl directe (106 bytes)"""
-        # Format EXACT de la capture 1
-        outlet_data = {
-            "method": "outletCtrl",
-            "params": {
-                "pid": str(pid),
-                "num": 0,
-                "on": 1 if on else 0,
-                "pwm": int(pwm) if on else 24  # Utilise pwm spécifique ou 24 pour extinction
-            }
-        }
-        
-        payload = {"data": json.dumps(outlet_data)}
-        payload_size = len(json.dumps(payload))
-        
-        _LOGGER.debug(f"Step 1 - outletCtrl: {payload_size} bytes")
-        _LOGGER.debug(f"Step 1 payload: {payload}")
-        
-        response = await self._make_request(self.endpoints["device_control"], payload)
-        
-        if response and response.get('code') == '000':
-            _LOGGER.info(f"Step 1 (outletCtrl) successful for {pid}")
-            return True
-        else:
-            _LOGGER.error(f"Step 1 (outletCtrl) failed for {pid}: {response}")
-            return False
-
-    async def _send_command_confirmation(self, pid: str, on: bool, pwm: int):
-        """ÉTAPE 2: Envoyer la confirmation de commande (106 bytes)"""
-        # Format EXACT de la capture 2
-        confirmation_data = {
-            "msg": "0",
-            "pid": str(pid),
-            "regId": "17",  # ID de produit de votre appareil
-            "method": "outletCtrl",
-            "code": 200
-        }
-        
-        payload = {"data": json.dumps(confirmation_data)}
-        payload_size = len(json.dumps(payload))
-        
-        _LOGGER.debug(f"Step 2 - confirmation: {payload_size} bytes")
-        _LOGGER.debug(f"Step 2 payload: {payload}")
-        
-        response = await self._make_request(self.endpoints["device_control"], payload)
-        
-        if response and response.get('code') == '000':
-            _LOGGER.info(f"Step 2 (confirmation) successful for {pid}")
-            return True
-        else:
-            _LOGGER.warning(f"Step 2 (confirmation) failed for {pid}: {response}")
-            return False
-
-    async def _send_state_update(self, pid: str, on: bool, pwm: int):
-        """ÉTAPE 3: Envoyer la mise à jour d'état upDataStat (601 bytes)"""
-        # Format EXACT de la capture 3
-        state_data = {
-            "method": "upDataStat",
-            "pid": str(pid),
-            "page_cnt": 1,
-            "params": {
-                "pcode": 2002,
-                "vid": str(self.user_id),  # Votre user ID
-                "stat": 300 if not on else 100,  # Stat spécial pour éteint/allumé - CORRIGÉ
-                "episode": 0,
-                "on": 1 if on else 0,
-                "et": 1020,               # Valeur observée dans la capture
-                "pwm": int(pwm) if on else 10,  # PWM ou 10 pour éteint
-                "srecode": 0,
-                # Champs supplémentaires pour atteindre ~601 bytes
-                "wifi": 1,
-                "bt": 1,
-                "connect": 1,
-                "deviceId": str(pid),
-                "productId": 17,
-                "userId": self.user_id,
-                "timestamp": int(time.time()),
-                "mode": "bluetooth",
-                "status": "active" if on else "inactive",
-                "lastUpdate": int(time.time()),
-                "batteryLevel": 100,
-                "signalStrength": -45,
-                "temperature": 25,
-                "humidity": 60,
-                "version": "1.3.2",
-                "protocol": "marspro_bt"
-            }
-        }
-        
-        payload = {"data": json.dumps(state_data)}
-        payload_size = len(json.dumps(payload))
-        
-        _LOGGER.debug(f"Step 3 - upDataStat: {payload_size} bytes")
-        _LOGGER.debug(f"Step 3 payload: {json.dumps(state_data, indent=2)[:200]}...")
-        
-        response = await self._make_request(self.endpoints["device_control"], payload)
-        
-        if response and response.get('code') == '000':
-            _LOGGER.info(f"Step 3 (upDataStat) successful for {pid}")
-            return True
-        else:
-            _LOGGER.warning(f"Step 3 (upDataStat) failed for {pid}: {response}")
-            return False
-
-    async def _send_final_heartbeat(self, pid: str, on: bool, pwm: int):
-        """ÉTAPE 4: Envoyer le heartbeat final de validation"""
-        # Format de heartbeat final
-        heartbeat_data = {
-            "method": "heartbeat",
-            "params": {
-                "pid": str(pid),
-                "vid": str(self.user_id),
-                "timestamp": int(time.time()),
-                "status": "active" if on else "inactive",
-                "mode": "bluetooth",
-                "lastCommand": "outletCtrl",
-                "commandResult": "success"
-            }
-        }
-        
-        payload = {"data": json.dumps(heartbeat_data)}
-        
-        _LOGGER.debug(f"Step 4 - final heartbeat")
-        _LOGGER.debug(f"Step 4 payload: {payload}")
-        
-        response = await self._make_request(self.endpoints["device_control"], payload)
-        
-        if response and response.get('code') == '000':
-            _LOGGER.info(f"Step 4 (final heartbeat) successful for {pid}")
-            return True
-        else:
-            _LOGGER.warning(f"Step 4 (final heartbeat) failed for {pid}: {response}")
+            _LOGGER.error(f"Erreur contrôle MarsPro: {e}")
             return False
 
     def stop_heartbeat(self):
